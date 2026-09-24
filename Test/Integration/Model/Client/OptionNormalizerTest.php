@@ -156,6 +156,99 @@ final class OptionNormalizerTest extends TestCase
     }
 
     /**
+     * Anthropic has no "required" of its own; "any" is its name for "call some tool". Proves the
+     * shipped wiring translates the value, not only the option name, for a real bundled provider.
+     */
+    public function test_translates_tool_choice_to_what_the_provider_calls_it(): void
+    {
+        $normalized = $this->normalizer->normalize('anthropic', ['tool_choice' => 'required']);
+
+        self::assertSame(['type' => 'any'], $normalized['tool_choice']);
+    }
+
+    /**
+     * Forcing one named tool is the one canonical value carrying a name the wiring has to place
+     * into the provider's own shape, nested however deep that provider puts it.
+     */
+    public function test_forces_a_named_tool_through_the_shipped_wiring(): void
+    {
+        $normalized = $this->normalizer->normalize('openrouter', ['tool_choice' => ['tool' => 'classify_product']]);
+
+        self::assertSame(
+            ['type' => 'function', 'function' => ['name' => 'classify_product']],
+            $normalized['tool_choice']
+        );
+    }
+
+    /**
+     * Ollama has no tool_choice equivalent at all in the shipped wiring: "auto" is every
+     * provider's own default, so it stays a no-op rather than failing a call that only asked for
+     * what Ollama already does anyway.
+     */
+    public function test_auto_tool_choice_is_a_no_op_on_a_provider_the_wiring_declares_no_translation_for(): void
+    {
+        $normalized = $this->normalizer->normalize('ollama', ['tool_choice' => 'auto']);
+
+        self::assertArrayNotHasKey('tool_choice', $normalized);
+    }
+
+    /**
+     * Unlike "auto", "required" asks Ollama for behaviour it cannot provide, so the shipped wiring
+     * has to refuse it rather than silently drop it.
+     */
+    public function test_a_non_auto_tool_choice_is_refused_on_a_provider_the_wiring_declares_no_translation_for(): void
+    {
+        $this->expectException(LocalizedException::class);
+        $this->expectExceptionMessage('tool_choice');
+
+        $this->normalizer->normalize('ollama', ['tool_choice' => 'required']);
+    }
+
+    /**
+     * Anthropic's reasoning_effort spreads across two top-level fields in the shipped wiring
+     * (`thinking` and `output_config`), which a plain rename could never express.
+     */
+    public function test_reasoning_effort_expands_into_several_fields_through_the_shipped_wiring(): void
+    {
+        $normalized = $this->normalizer->normalize('anthropic', ['reasoning_effort' => 'low']);
+
+        self::assertSame(['type' => 'adaptive'], $normalized['thinking']);
+        self::assertSame(['effort' => 'low'], $normalized['output_config']);
+    }
+
+    /**
+     * Every bundled dialect declares a reasoning_effort translation, each in that provider's own
+     * vocabulary, proving the shipped wiring covers all five rather than only the ones tested above.
+     *
+     * @param string $serviceCode
+     * @param array<string,mixed> $expected
+     */
+    #[DataProvider('reasoningEffortProvider')]
+    public function test_reasoning_effort_is_translated_for_every_bundled_provider(
+        string $serviceCode,
+        array $expected,
+    ): void {
+        $normalized = $this->normalizer->normalize($serviceCode, ['reasoning_effort' => 'high']);
+
+        foreach ($expected as $key => $value) {
+            self::assertSame($value, $normalized[$key]);
+        }
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: array<string,mixed>}>
+     */
+    public static function reasoningEffortProvider(): array
+    {
+        return [
+            'openai speaks the Responses API' => ['openai', ['reasoning' => ['effort' => 'high']]],
+            'openrouter is chat-completions compatible' => ['openrouter', ['reasoning_effort' => 'high']],
+            'google has its own token-budget tiers' => ['google', ['thinkingConfig' => ['thinkingBudget' => 24576]]],
+            'ollama has its own think field' => ['ollama', ['think' => 'high']],
+        ];
+    }
+
+    /**
      * Options are rebuilt in canonical order as each one is rewritten, and no provider cares in
      * which order the body's fields arrive.
      *

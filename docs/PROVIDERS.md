@@ -164,11 +164,11 @@ form tells an administrator to install when the bridge is missing; a provider wi
 bridge omits it and is labelled unsupported instead.
 
 `dialect` names the request-option shape your provider speaks, which decides how the universal
-options (`max_tokens`, `temperature`, `top_p`, `stop`) are spelled on the wire — see
-[CONSUMING.md](CONSUMING.md#options). The shipped dialects are `openai_chat` (the
-`/v1/chat/completions` body most OpenAI-compatible providers use), `openai_responses`,
-`anthropic_messages`, `gemini` and `ollama`; declare your own alongside them on
-`Model\Client\OptionNormalizer` if your provider spells them differently:
+options (`max_tokens`, `temperature`, `top_p`, `stop`, `tool_choice`, `reasoning_effort`) are
+spelled on the wire — see [CONSUMING.md](CONSUMING.md#options). The shipped dialects are
+`openai_chat` (the `/v1/chat/completions` body most OpenAI-compatible providers use),
+`openai_responses`, `anthropic_messages`, `gemini` and `ollama`; declare your own alongside them
+on `Model\Client\OptionNormalizer` if your provider spells them differently:
 
 ```xml
 <type name="MageOS\AiBase\Model\Client\OptionNormalizer">
@@ -187,14 +187,34 @@ options (`max_tokens`, `temperature`, `top_p`, `stop`) are spelled on the wire �
                 <item name="defaults" xsi:type="array">
                     <item name="max_tokens" xsi:type="number">4096</item>
                 </item>
+                <!-- tool_choice and reasoning_effort: canonical value => request fragment to
+                     merge in. {{name}} is replaced with the tool name for `['tool' => '<name>']`. -->
+                <item name="values" xsi:type="array">
+                    <item name="tool_choice" xsi:type="array">
+                        <item name="auto" xsi:type="array">
+                            <item name="tool_choice" xsi:type="string">auto</item>
+                        </item>
+                        <item name="required" xsi:type="array">
+                            <item name="tool_choice" xsi:type="string">required</item>
+                        </item>
+                        <item name="tool" xsi:type="array">
+                            <item name="tool_choice" xsi:type="array">
+                                <item name="type" xsi:type="string">function</item>
+                                <item name="name" xsi:type="string">{{name}}</item>
+                            </item>
+                        </item>
+                    </item>
+                </item>
             </item>
         </argument>
     </arguments>
 </type>
 ```
 
-An option absent from `map` is treated as unsupported by that provider and raises a
-`LocalizedException` naming both, rather than being dropped on the way to the wire. Declaring no
+An option absent from `map`, or a canonical value absent from `values`, is treated as unsupported
+by that provider and raises a `LocalizedException` naming both, rather than being dropped on the
+way to the wire — except `tool_choice: auto`, which every provider treats as its own default and
+so is a silent no-op wherever a dialect declares no translation for it at all. Declaring no
 dialect at all passes every option through untouched.
 
 The factory signatures are verified against **symfony/ai-platform v0.13.0**; the component is

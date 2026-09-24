@@ -91,7 +91,7 @@ per-call option was ever set.
 
 ## Options
 
-Four options are provider-neutral and get translated to whatever the configured backend calls
+Six options are provider-neutral and get translated to whatever the configured backend calls
 them, so the same code works whichever one an administrator picked:
 
 | Option | Notes |
@@ -100,6 +100,8 @@ them, so the same code works whichever one an administrator picked:
 | `temperature` | Same name everywhere. |
 | `top_p` | `topP` on Google. |
 | `stop` | `stop_sequences` on Anthropic, `stopSequences` on Google; a single string is wrapped into a list where the provider wants one. **Not supported on OpenAI and Azure**, whose Responses API has no such parameter — passing it there throws rather than being dropped. |
+| `tool_choice` | `auto`, `none`, `required`, or `['tool' => '<name>']` to force one specific tool. Each value is translated too, not only renamed: Anthropic's "required" is `any`. **Not supported on Ollama** — `auto` is a no-op there since it is every provider's own default, anything else throws. |
+| `reasoning_effort` | `none`, `low`, `medium` or `high`. Spreads across more than one request field on some providers (Anthropic sets both `thinking` and `output_config`). |
 
 Anything else is passed through to the provider untouched, so provider-specific features stay
 reachable (Anthropic's `thinking`, Ollama's `keep_alive`, ...). That is the escape hatch for code
