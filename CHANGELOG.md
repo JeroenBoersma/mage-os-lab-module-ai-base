@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same way a buffered call already could. See `docs/CONSUMING.md`'s new "Typed exceptions"
   section for the full mapping and which bridges (Ollama, HuggingFace, Azure, OpenRouter, LM
   Studio) report less than the rest.
+- **Reasoning is carried between tool-loop turns instead of being dropped.** Providers that think
+  before answering (Anthropic with extended thinking, OpenAI/Azure's Responses API, Gemini) return
+  a reasoning block alongside the turn and expect it echoed back unchanged on the next request; a
+  tool loop that only replayed text and tool calls made the model redo its reasoning every round,
+  and dropping a required block from a replayed Anthropic turn could fail the call outright.
+  `ChatResponseInterface::getReasoning()` and the new `Api\Data\ReasoningInterface` (`getText()`,
+  an opaque `getSignature()` this module never inspects, edits or renders) expose it;
+  `ChatMessageInterface::getReasoning()` and `ChatRequestInterface::withAssistantTurn()` carry it
+  onto the replayed assistant turn automatically, so an existing tool loop gets this for free.
+  `SymfonyAiClient` reads it from `ThinkingResult` parts on a buffered call and from
+  `StreamResult::getAssistantMessage()` on a streamed one (the one place a stream's signature,
+  sometimes only reported after its block has closed, can be read whole), and rebuilds it as a
+  `Thinking` content part — leading the turn's other content, which Anthropic requires — when
+  replaying an assistant message. OpenAI and Azure additionally need `include:
+  ["reasoning.encrypted_content"]` on the request for the item to come back at all;
+  `SymfonyAiClient` now adds it for any service whose bridge declares the `openai_responses`
+  dialect, keeping a caller's own `include` values. Providers that report no reasoning return an
+  empty list, so nothing changes for them.
 - **AI usage tracking**: every call made through `AiClientInterface` is now recorded — token
   counts and metadata only, **never prompt or response content** — and surfaced at
   **Reports > AI Token Usage** as a dashboard (totals, period-over-period change against the same

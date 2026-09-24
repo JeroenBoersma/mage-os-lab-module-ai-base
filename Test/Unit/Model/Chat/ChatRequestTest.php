@@ -8,6 +8,7 @@ use MageOS\AiBase\Api\Data\MessageRole;
 use MageOS\AiBase\Model\Chat\ChatMessage;
 use MageOS\AiBase\Model\Chat\ChatRequest;
 use MageOS\AiBase\Model\Chat\ChatResponse;
+use MageOS\AiBase\Model\Chat\Reasoning;
 use MageOS\AiBase\Model\Chat\ToolCall;
 use MageOS\AiBase\Model\Chat\ToolDefinition;
 use PHPUnit\Framework\TestCase;
@@ -100,6 +101,30 @@ final class ChatRequestTest extends TestCase
         self::assertNull($message->getToolCallId());
     }
 
+    /**
+     * A tool loop that stores this message and replays it later has to send the provider back
+     * exactly the reasoning block it originally issued, opaque signature included.
+     */
+    public function test_an_assistant_message_carries_the_reasoning_blocks_it_produced(): void
+    {
+        $reasoning = new Reasoning('weighing options', 'sig_abc');
+        $message = new ChatMessage(MessageRole::Assistant, 'Let me look', [], null, [$reasoning]);
+
+        self::assertSame([$reasoning], $message->getReasoning());
+    }
+
+    public function test_a_message_of_any_other_role_carries_no_reasoning(): void
+    {
+        self::assertSame([], (new ChatMessage(MessageRole::User, 'Hi'))->getReasoning());
+    }
+
+    public function test_rejects_a_reasoning_list_holding_something_other_than_reasoning(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        new ChatMessage(MessageRole::Assistant, 'Let me look', [], null, ['not-reasoning']);
+    }
+
     public function test_a_request_without_tools_reports_an_empty_tool_list(): void
     {
         self::assertSame([], (new ChatRequest([new ChatMessage(MessageRole::User, 'Hi')]))->getTools());
@@ -143,5 +168,20 @@ final class ChatRequestTest extends TestCase
         self::assertSame(MessageRole::Assistant, $next->getMessages()[1]->getRole());
         self::assertSame('Let me look', $next->getMessages()[1]->getContent());
         self::assertSame([$call], $next->getMessages()[1]->getToolCalls());
+    }
+
+    /**
+     * A provider that requires reasoning back (Anthropic with thinking enabled) rejects the next
+     * turn of a tool loop if it is missing, so withAssistantTurn() has to carry it exactly as the
+     * response reported it, not just the text and tool calls.
+     */
+    public function test_appends_the_models_own_turn_with_its_reasoning_intact(): void
+    {
+        $reasoning = new Reasoning('weighing options', 'sig_abc');
+        $request = new ChatRequest([new ChatMessage(MessageRole::User, 'Which are pending?')]);
+
+        $next = $request->withAssistantTurn(new ChatResponse('Let me look', [], null, null, null, [$reasoning]));
+
+        self::assertSame([$reasoning], $next->getMessages()[1]->getReasoning());
     }
 }

@@ -6,6 +6,7 @@ namespace MageOS\AiBase\Model\Chat;
 
 use MageOS\AiBase\Api\Data\ChatResponseInterface;
 use MageOS\AiBase\Api\Data\FinishReason;
+use MageOS\AiBase\Api\Data\ReasoningInterface;
 use MageOS\AiBase\Api\Data\TokenUsageInterface;
 use MageOS\AiBase\Api\Data\ToolCallInterface;
 
@@ -17,6 +18,7 @@ class ChatResponse implements ChatResponseInterface
      * @param TokenUsageInterface|null $usage
      * @param FinishReason|null $finishReason
      * @param string|null $rawFinishReason Stop reason in the provider's own wording
+     * @param ReasoningInterface[] $reasoning Reasoning blocks the model produced before this turn
      */
     public function __construct(
         private readonly string $text = '',
@@ -24,6 +26,7 @@ class ChatResponse implements ChatResponseInterface
         private readonly ?TokenUsageInterface $usage = null,
         private readonly ?FinishReason $finishReason = null,
         private readonly ?string $rawFinishReason = null,
+        private readonly array $reasoning = [],
     ) {
     }
 
@@ -73,5 +76,13 @@ class ChatResponse implements ChatResponseInterface
     public function getRawFinishReason(): ?string
     {
         return $this->rawFinishReason;
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function getReasoning(): array
+    {
+        return array_values($this->reasoning);
     }
 }
