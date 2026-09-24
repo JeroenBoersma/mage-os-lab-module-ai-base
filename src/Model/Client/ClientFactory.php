@@ -266,11 +266,12 @@ class ClientFactory implements AiClientFactoryInterface
 
         // Bridge Factory::createPlatform() signatures vary by provider (verified
         // against symfony/ai-platform v0.13.0): hosted providers take an API key;
-        // local runtimes take an endpoint/base URL; Azure takes endpoint +
-        // deployment (the selected model) + API version + key.
+        // local runtimes take an endpoint/base URL; openai_compatible takes both, since unlike
+        // Ollama/LM Studio it fronts no specific runtime and cannot assume one is unauthenticated;
+        // Azure takes endpoint + deployment (the selected model) + API version + key.
         //
         // Every arm ends in optionalArguments() so that no provider is left out of the model
-        // catalogue: the two that take their endpoint positionally are also the two with a
+        // catalogue: the ones that take their endpoint positionally are also the ones with a
         // free-text model field, which makes them the likeliest to hold a model no static
         // catalogue lists.
         $platform = match ($code) {
@@ -280,6 +281,11 @@ class ClientFactory implements AiClientFactoryInterface
             ),
             'lmstudio' => $factoryClass::createPlatform(
                 $this->resolveBaseUrl($config, LmStudio::DEFAULT_BASE_URL),
+                ...$this->optionalArguments($factoryClass, $code, $config),
+            ),
+            'openai_compatible' => $factoryClass::createPlatform(
+                $this->stringValue($config, 'base_url'),
+                $this->stringValue($config, 'api_key') ?: null,
                 ...$this->optionalArguments($factoryClass, $code, $config),
             ),
             'azure' => $factoryClass::createPlatform(

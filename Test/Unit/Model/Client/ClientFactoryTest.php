@@ -502,6 +502,33 @@ final class ClientFactoryTest extends TestCase
         self::assertSame($expected, RecordingLocalRuntimeFactory::$baseUrl);
     }
 
+    /**
+     * Base URL and API key both reach the bridge, in that order — the shape
+     * {@see \Symfony\AI\Platform\Bridge\Generic\Factory::createPlatform()} declares.
+     */
+    public function test_create_passes_base_url_and_api_key_to_the_openai_compatible_bridge(): void
+    {
+        $this->serviceSelector->method('getByCode')->with('openai_compatible')->willReturn([
+            new AiService('row_compat', 'openai_compatible', [
+                'base_url' => 'https://litellm.internal:4000',
+                'api_key'  => 'sk-local',
+                'model'    => 'local-model',
+            ]),
+        ]);
+        $this->clientFactory->method('create')->willReturn($this->createMock(SymfonyAiClient::class));
+
+        $subject = $this->newSubject(new BridgeRegistry([
+            'openai_compatible' => [
+                'factory' => RecordingLocalRuntimeFactory::class,
+                'package' => 'symfony/ai-generic-platform',
+            ],
+        ]));
+
+        $subject->create('openai_compatible');
+
+        self::assertSame('https://litellm.internal:4000', RecordingLocalRuntimeFactory::$baseUrl);
+    }
+
     public function test_create_by_id_reports_a_missing_bridge_for_the_selected_row(): void
     {
         $this->serviceSelector->method('getById')->with('_row_a')
