@@ -57,10 +57,19 @@ class OptionNormalizer
     /**
      * Provider-neutral option names whose value, not only its key, differs per provider.
      *
-     * `required` becomes Anthropic's `any`; a single value can expand into several target keys.
-     * See the `values` dialect key this class reads for them.
+     * Keyed by option, listing the canonical values each accepts. `required` becomes Anthropic's
+     * `any`; a single value can expand into several target keys. See the `values` dialect key this
+     * class reads for them.
+     *
+     * The value list is what tells a canonical request apart from a provider-native one. For
+     * `tool_choice` the canonical name is also the provider's own on Anthropic, OpenAI, Azure and
+     * every OpenAI-compatible endpoint, so `['type' => 'tool', 'name' => 'x']` is a caller who
+     * addressed Anthropic directly, and it passes through untouched like any other native option.
      */
-    private const VALUE_MAPPED_OPTIONS = ['tool_choice', 'reasoning_effort'];
+    private const VALUE_MAPPED_OPTIONS = [
+        'tool_choice' => ['auto', 'none', 'required', self::VALUE_KEY_TOOL],
+        'reasoning_effort' => ['none', 'low', 'medium', 'high'],
+    ];
 
     /**
      * Dialect key holding canonical option name => provider option name.
@@ -134,7 +143,7 @@ class OptionNormalizer
             $options = $this->applyOption($serviceCode, $dialect, $options, $canonical);
         }
 
-        foreach (self::VALUE_MAPPED_OPTIONS as $canonical) {
+        foreach (array_keys(self::VALUE_MAPPED_OPTIONS) as $canonical) {
             $options = $this->applyValueOption($serviceCode, $dialect, $options, $canonical);
         }
 
@@ -216,12 +225,15 @@ class OptionNormalizer
      * lets Anthropic's `reasoning_effort: low` set both `thinking` and `output_config` from one
      * canonical option.
      *
+     * A value that is not one of the option's canonical values is the provider's own and is left
+     * exactly as the caller wrote it, the same escape hatch every unmapped option already has.
+     *
      * @param string $serviceCode
      * @param Dialect $dialect
      * @param RequestOptions $options
      * @param string $canonical
      * @return RequestOptions
-     * @throws AiRequestNotSentException When the value has no translation and is not the neutral default
+     * @throws AiRequestNotSentException When a canonical value has no translation and is not the neutral default
      */
     private function applyValueOption(string $serviceCode, array $dialect, array $options, string $canonical): array
     {
@@ -229,12 +241,13 @@ class OptionNormalizer
             return $options;
         }
 
-        $value = $options[$canonical];
-        unset($options[$canonical]);
+        [$lookupKey, $toolName] = $this->resolveValueLookup($options[$canonical]);
+        if (!in_array($lookupKey, self::VALUE_MAPPED_OPTIONS[$canonical] ?? [], true)) {
+            return $options;
+        }
 
-        [$lookupKey, $toolName] = $this->resolveValueLookup($value);
-        $values = $dialect[self::KEY_VALUES][$canonical] ?? [];
-        $fragment = $values[$lookupKey] ?? null;
+        unset($options[$canonical]);
+        $fragment = $dialect[self::KEY_VALUES][$canonical][$lookupKey] ?? null;
 
         if ($fragment === null) {
             if ($lookupKey === (self::NEUTRAL_DEFAULT_VALUES[$canonical] ?? null)) {
@@ -260,8 +273,11 @@ class OptionNormalizer
     }
 
     /**
-     * Which entry of a `values` table a caller's raw option value looks up, and the tool name to
-     * substitute in when it is the "force this named tool" shape.
+     * Which entry of a `values` table a caller's raw option value looks up.
+     *
+     * Also returns the tool name to substitute in when it is the "force this named tool" shape.
+     * Anything that is neither a string nor that shape yields an empty key, which no option
+     * declares as canonical, so it passes through as provider-native.
      *
      * @param mixed $value
      * @return array{0: string, 1: string|null}
@@ -292,6 +308,8 @@ class OptionNormalizer
     }
 
     /**
+     * Replace TOOL_NAME_PLACEHOLDER in one fragment value, at any depth.
+     *
      * Recurses because a provider may nest the tool's name arbitrarily deep (Anthropic takes it
      * directly, OpenAI-compatible chat completions one level further inside `function.name`).
      *
@@ -325,6 +343,8 @@ class OptionNormalizer
     }
 
     /**
+     * Apply toNumberIfNumeric() to one fragment value, at any depth.
+     *
      * @param mixed $value
      * @return mixed
      */

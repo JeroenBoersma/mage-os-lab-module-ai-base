@@ -213,9 +213,28 @@ on `Model\Client\OptionNormalizer` if your provider spells them differently:
 
 An option absent from `map`, or a canonical value absent from `values`, is treated as unsupported
 by that provider and raises a `LocalizedException` naming both, rather than being dropped on the
-way to the wire — except `tool_choice: auto`, which every provider treats as its own default and
-so is a silent no-op wherever a dialect declares no translation for it at all. Declaring no
-dialect at all passes every option through untouched.
+way to the wire. The exception is `tool_choice: auto`, which every provider treats as its own
+default and so is a silent no-op wherever a dialect declares no translation for it at all. A value
+outside the canonical set (`auto`, `none`, `required`, `['tool' => '<name>']` for `tool_choice`;
+`none`, `low`, `medium`, `high` for `reasoning_effort`) is the provider's own and passes through
+as written. Declaring no dialect at all passes every option through untouched.
+
+### Model-dependent values
+
+A dialect is chosen per service code, while the model sits on the configured row, so the `values`
+table cannot know which model a request goes to. A few of the shipped translations are accepted by
+some models of a provider and rejected with a 400 by others. A store that hits one of these knows
+to look at the model configured on the row, not at this module:
+
+| Provider | Value | Caveat |
+|---|---|---|
+| Anthropic | `reasoning_effort: none` | Becomes `thinking: {type: "disabled"}`, which models whose thinking is always on reject. |
+| Anthropic | `tool_choice: required`, `['tool' => '<name>']` | Forced tool choice (`any`, `tool`) is rejected by some recent models. |
+| Gemini | `reasoning_effort: none` | Becomes `thinkingBudget: 0`. Models that cannot switch thinking off (2.5 Pro) enforce a minimum budget instead. |
+| Gemini | `reasoning_effort: low`/`medium`/`high` | The token budgets (1024, 8192, 24576) are this module's own choice. Newer models use a named thinking level rather than a budget. |
+
+Where a model needs something else, send the provider's own option instead of the neutral one;
+it wins over the translation.
 
 The factory signatures are verified against **symfony/ai-platform v0.13.0**; the component is
 experimental with no BC promise — pin your version and re-verify on upgrade. Hosted providers

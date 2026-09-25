@@ -306,7 +306,11 @@
                     <!-- Anthropic has no "required": "any" is its own name for "call some tool".
                          reasoning_effort spreads across two fields: `thinking.type` switches
                          extended thinking on or off, and `output_config.effort` only means anything
-                         once it is on, so "none" leaves it out entirely. -->
+                         once it is on, so "none" leaves it out entirely.
+
+                         Two of these are model-dependent (see docs/PROVIDERS.md, "Model-dependent
+                         values"): models whose thinking is always on reject "disabled", and some
+                         recent models reject a forced tool choice ("any" or "tool"). -->
                     <item name="values" xsi:type="array">
                         <item name="tool_choice" xsi:type="array">
                             <item name="auto" xsi:type="array">
@@ -379,7 +383,10 @@
                          `allowedFunctionNames` narrowing which tool "ANY" is allowed to be. Its
                          thinking control has no effort levels of its own, only a token budget
                          (`thinkingConfig.thinkingBudget`); the tiers below are this module's own
-                         choice, not a value Google's API defines. -->
+                         choice, not a value Google's API defines. The budget is per model: 2.5
+                         Flash accepts 0 to switch thinking off, 2.5 Pro enforces a minimum and
+                         rejects it, and newer models take a named thinking level rather than a
+                         budget (see docs/PROVIDERS.md, "Model-dependent values"). -->
                     <item name="values" xsi:type="array">
                         <item name="tool_choice" xsi:type="array">
                             <item name="auto" xsi:type="array">

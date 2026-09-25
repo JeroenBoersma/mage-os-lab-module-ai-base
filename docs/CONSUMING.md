@@ -103,6 +103,14 @@ them, so the same code works whichever one an administrator picked:
 | `tool_choice` | `auto`, `none`, `required`, or `['tool' => '<name>']` to force one specific tool. Each value is translated too, not only renamed: Anthropic's "required" is `any`. **Not supported on Ollama** — `auto` is a no-op there since it is every provider's own default, anything else throws. |
 | `reasoning_effort` | `none`, `low`, `medium` or `high`. Spreads across more than one request field on some providers (Anthropic sets both `thinking` and `output_config`). |
 
+For `tool_choice` and `reasoning_effort`, only the values listed above are translated. Any other
+value is taken to be the provider's own and sent as written, so code already forcing a tool in
+Anthropic's shape (`['type' => 'tool', 'name' => 'get_orders']`) or asking OpenAI for `minimal`
+effort keeps working. Some of the translated values are only accepted by some models of a
+provider, not all of them; see
+[PROVIDERS.md](PROVIDERS.md#model-dependent-values) before relying on `reasoning_effort: none` or a
+forced tool on Anthropic or Gemini.
+
 Anything else is passed through to the provider untouched, so provider-specific features stay
 reachable (Anthropic's `thinking`, Ollama's `keep_alive`, ...). That is the escape hatch for code
 that has deliberately picked its backend; it is not portable, by definition.

@@ -205,6 +205,19 @@ final class OptionNormalizerTest extends TestCase
     }
 
     /**
+     * A consumer that already forces a tool in Anthropic's own shape keeps working through the
+     * shipped wiring, since `tool_choice` is Anthropic's option name as well as the canonical one.
+     */
+    public function test_a_provider_native_tool_choice_passes_through_the_shipped_wiring(): void
+    {
+        $native = ['type' => 'tool', 'name' => 'get_orders'];
+
+        $normalized = $this->normalizer->normalize('anthropic', ['tool_choice' => $native]);
+
+        self::assertSame($native, $normalized['tool_choice']);
+    }
+
+    /**
      * Anthropic's reasoning_effort spreads across two top-level fields in the shipped wiring
      * (`thinking` and `output_config`), which a plain rename could never express.
      */

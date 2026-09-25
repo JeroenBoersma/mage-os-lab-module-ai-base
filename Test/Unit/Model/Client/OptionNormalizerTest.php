@@ -281,6 +281,44 @@ final class OptionNormalizerTest extends TestCase
         self::assertSame(['effort' => 'high'], $normalized['output_config']);
     }
 
+    /**
+     * `tool_choice` is also Anthropic's own option name, so a caller who already forces a tool in
+     * Anthropic's shape addressed the provider directly. That reached the wire untouched before
+     * the option became canonical, and has to keep doing so.
+     */
+    public function test_a_provider_native_tool_choice_passes_through_untouched(): void
+    {
+        $native = ['type' => 'tool', 'name' => 'get_orders'];
+
+        $normalized = $this->subject()->normalize('anthropic', ['tool_choice' => $native]);
+
+        self::assertSame($native, $normalized['tool_choice']);
+    }
+
+    /**
+     * A string outside the canonical set is a provider-native value too (OpenAI's "minimal"
+     * effort), not a request for something the provider lacks, so it is not refused.
+     */
+    public function test_a_non_canonical_string_value_passes_through_untouched(): void
+    {
+        $normalized = $this->subjectWithOllama()->normalize('ollama', ['reasoning_effort' => 'minimal']);
+
+        self::assertSame(['reasoning_effort' => 'minimal'], $normalized);
+    }
+
+    /**
+     * Ollama has no tool_choice translation, but a native value is still the caller's business:
+     * only a canonical value the dialect cannot express is refused.
+     */
+    public function test_a_provider_native_tool_choice_is_not_refused_where_no_translation_exists(): void
+    {
+        $native = ['type' => 'function', 'function' => ['name' => 'get_orders']];
+
+        $normalized = $this->subjectWithOllama()->normalize('ollama', ['tool_choice' => $native]);
+
+        self::assertSame($native, $normalized['tool_choice']);
+    }
+
     private function subject(): OptionNormalizer
     {
         return new OptionNormalizer(
