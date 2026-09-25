@@ -57,4 +57,15 @@ interface ChatResponseInterface
      * @return string|null
      */
     public function getRawFinishReason(): ?string;
+
+    /**
+     * Reasoning blocks the model produced before this turn's text or tool calls, oldest first.
+     *
+     * Opaque: carry it back unchanged through {@see ChatRequestInterface::withAssistantTurn()}
+     * rather than reading or altering it. Empty for a provider that reported none, which is every
+     * provider without extended reasoning and every ordinary turn of one that has it.
+     *
+     * @return list<ReasoningInterface>
+     */
+    public function getReasoning(): array;
 }

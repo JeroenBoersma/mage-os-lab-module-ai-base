@@ -7,6 +7,7 @@ namespace MageOS\AiBase\Test\Unit\Model\Chat;
 use MageOS\AiBase\Api\Data\FinishReason;
 use MageOS\AiBase\Api\Data\StreamChunkType;
 use MageOS\AiBase\Model\Chat\ChatResponse;
+use MageOS\AiBase\Model\Chat\Reasoning;
 use MageOS\AiBase\Model\Chat\StreamChunk;
 use MageOS\AiBase\Model\Chat\TokenUsage;
 use MageOS\AiBase\Model\Chat\ToolCall;
@@ -47,6 +48,30 @@ final class ChatResponseTest extends TestCase
     public function test_usage_is_absent_when_the_provider_reported_none(): void
     {
         self::assertNull((new ChatResponse('Done'))->getUsage());
+    }
+
+    /**
+     * The signature is opaque and provider-specific, so it has to survive on the value object
+     * exactly as the provider issued it, ready to be carried back through withAssistantTurn().
+     */
+    public function test_exposes_the_reasoning_blocks_the_model_produced(): void
+    {
+        $reasoning = new Reasoning('weighing options', 'sig_abc');
+        $response = new ChatResponse('Let me look', [], null, null, null, [$reasoning]);
+
+        self::assertSame([$reasoning], $response->getReasoning());
+        self::assertSame('weighing options', $response->getReasoning()[0]->getText());
+        self::assertSame('sig_abc', $response->getReasoning()[0]->getSignature());
+    }
+
+    public function test_reports_no_reasoning_when_none_was_given(): void
+    {
+        self::assertSame([], (new ChatResponse('Done'))->getReasoning());
+    }
+
+    public function test_a_reasoning_block_may_carry_no_signature(): void
+    {
+        self::assertNull((new Reasoning('weighing options'))->getSignature());
     }
 
     /**

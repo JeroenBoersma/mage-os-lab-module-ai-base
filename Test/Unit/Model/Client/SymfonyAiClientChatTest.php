@@ -31,14 +31,19 @@ use Symfony\AI\Platform\Message\Role;
 use Symfony\AI\Platform\Metadata\Metadata;
 use Symfony\AI\Platform\PlatformInterface;
 use Symfony\AI\Platform\Test\InMemoryPlatform;
+use Symfony\AI\Platform\Message\AssistantMessage;
 use Symfony\AI\Platform\Result\MultiPartResult;
+use Symfony\AI\Platform\Result\Stream\AssistantMessageStreamListener;
+use Symfony\AI\Platform\Result\Stream\Delta\DeltaInterface;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolInputDelta;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Tool\Tool;
@@ -114,6 +119,32 @@ final class SymfonyAiClientChatTest extends TestCase
 
         self::assertSame('Let me look', $response->getText());
         self::assertTrue($response->hasToolCalls());
+    }
+
+    /**
+     * Anthropic's Messages API and OpenAI's Responses API both return a thinking/reasoning item
+     * alongside the answer, opaque signature included, and expect it echoed back unchanged on the
+     * next request of a tool loop.
+     */
+    public function test_reads_reasoning_and_its_signature_from_a_buffered_result(): void
+    {
+        $platform = new FakePlatform(new FakeResult(new MultiPartResult([
+            new ThinkingResult('weighing options', 'sig_abc'),
+            new TextResult('Let me look'),
+        ])));
+
+        $response = $this->client($platform)->chat($this->helloRequest());
+
+        self::assertSame('weighing options', $response->getReasoning()[0]->getText());
+        self::assertSame('sig_abc', $response->getReasoning()[0]->getSignature());
+        self::assertSame('Let me look', $response->getText());
+    }
+
+    public function test_reports_no_reasoning_when_the_provider_sent_none(): void
+    {
+        $platform = new FakePlatform(new FakeResult(new TextResult('Hi')));
+
+        self::assertSame([], $this->client($platform)->chat($this->helloRequest())->getReasoning());
     }
 
     public function test_reports_token_usage_from_the_result_metadata(): void
@@ -253,6 +284,34 @@ final class SymfonyAiClientChatTest extends TestCase
         self::assertSame(Role::ToolCall, $messages[2]->getRole());
         self::assertSame('toolu_01', $messages[2]->getToolCall()->getId());
         self::assertSame('get_orders', $messages[2]->getToolCall()->getName());
+    }
+
+    /**
+     * The point of carrying reasoning at all: a tool loop that reads it off one turn's response and
+     * replays it via withAssistantTurn() must send the provider back exactly the block and signature
+     * it issued, leading the other content, or Anthropic rejects the next turn and OpenAI never
+     * verifies the block came from it.
+     */
+    public function test_replays_reasoning_back_to_the_provider_unchanged_on_the_next_turn(): void
+    {
+        $platform = new FakePlatform(new FakeResult(new MultiPartResult([
+            new ThinkingResult('weighing options', 'sig_abc'),
+            new ToolCallResult([new ToolCall('toolu_01', 'get_orders', ['status' => 'pending'])]),
+        ])));
+        $request = $this->helloRequest();
+
+        $response = $this->client($platform)->chat($request);
+        $next = $request
+            ->withAssistantTurn($response)
+            ->withToolResult($response->getToolCalls()[0], '{"count":3}');
+
+        $this->client($platform)->chat($next);
+
+        $assistantMessage = $platform->messages->getMessages()[1];
+        self::assertTrue($assistantMessage->hasThinking(), 'The reasoning block must lead the turn.');
+        self::assertSame('weighing options', $assistantMessage->getThinking()[0]->getContent());
+        self::assertSame('sig_abc', $assistantMessage->getThinking()[0]->getSignature());
+        self::assertSame($assistantMessage->getContent()[0], $assistantMessage->getThinking()[0]);
     }
 
     /**
@@ -489,6 +548,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
         );
 
         self::assertSame(UsageRecordInterface::CONSUMER_UNKNOWN, $client->getConsumer());
@@ -508,6 +568,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
             '   ',
         );
 
@@ -544,6 +605,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
         );
 
         self::assertInstanceOf(PlatformInterface::class, $client->getPlatform());
@@ -735,6 +797,76 @@ final class SymfonyAiClientChatTest extends TestCase
     }
 
     /**
+     * The Responses API drops its reasoning item from the reply entirely unless the request lists it
+     * under `include`, whether or not extended reasoning was ever otherwise requested. Without this
+     * a service speaking that API never has anything for {@see toChatResponse()} to read at all.
+     */
+    public function test_adds_the_reasoning_include_option_for_a_service_speaking_the_responses_api(): void
+    {
+        $platform = new FakePlatform(new FakeResult(new TextResult('Hi')));
+        $client = new SymfonyAiClient(
+            $platform,
+            'gpt-4o',
+            'openai',
+            '_row_1',
+            $this->optionNormalizer(),
+            $this->usageNormalizer(),
+            new AiExceptionMapper(),
+            new BridgeRegistry(['openai' => ['dialect' => 'openai_responses']]),
+        );
+
+        $client->chat($this->helloRequest());
+
+        self::assertSame(['reasoning.encrypted_content'], $platform->options['include'] ?? null);
+    }
+
+    public function test_does_not_add_the_reasoning_include_option_for_a_service_that_does_not_need_it(): void
+    {
+        $platform = new FakePlatform(new FakeResult(new TextResult('Hi')));
+        $client = new SymfonyAiClient(
+            $platform,
+            'claude-3',
+            'anthropic',
+            '_row_1',
+            $this->optionNormalizer(),
+            $this->usageNormalizer(),
+            new AiExceptionMapper(),
+            new BridgeRegistry(['anthropic' => ['dialect' => 'anthropic_messages']]),
+        );
+
+        $client->chat($this->helloRequest());
+
+        self::assertArrayNotHasKey('include', $platform->options);
+    }
+
+    /**
+     * A caller who already addressed `include` (for a file search or code interpreter item, say)
+     * must keep seeing those values: silently overwriting them would drop a feature they asked for
+     * to make room for one they did not.
+     */
+    public function test_keeps_a_callers_own_include_values_when_adding_the_reasoning_one(): void
+    {
+        $platform = new FakePlatform(new FakeResult(new TextResult('Hi')));
+        $client = new SymfonyAiClient(
+            $platform,
+            'gpt-4o',
+            'openai',
+            '_row_1',
+            $this->optionNormalizer(),
+            $this->usageNormalizer(),
+            new AiExceptionMapper(),
+            new BridgeRegistry(['openai' => ['dialect' => 'openai_responses']]),
+        );
+
+        $client->chat($this->helloRequest(), ['include' => ['file_search_call.results']]);
+
+        self::assertSame(
+            ['file_search_call.results', 'reasoning.encrypted_content'],
+            $platform->options['include'] ?? null,
+        );
+    }
+
+    /**
      * A streaming tool loop has to append the assistant turn before the next iteration, and the
      * pieces of that turn arrive spread across the deltas. Rebuilding it per consumer is the
      * bookkeeping this client exists to remove.
@@ -760,6 +892,39 @@ final class SymfonyAiClientChatTest extends TestCase
         self::assertSame('get_orders', $turn->getToolCalls()[0]->getName());
         self::assertSame(45, $turn->getUsage()?->getCompletionTokens());
         self::assertSame(AiBaseFinishReason::ToolCall, $turn->getFinishReason());
+    }
+
+    /**
+     * A stream's signature often lands only in the delta that closes its thinking block, some
+     * bridges even emitting it after the block closed. The client has to read the turn the platform
+     * reassembled rather than the bare text deltas to carry it at all.
+     */
+    public function test_streaming_returns_the_reasoning_and_its_signature(): void
+    {
+        $platform = new FakePlatform(new FakeResult(null, null, [
+            new ThinkingStart(),
+            new ThinkingDelta('weighing '),
+            new ThinkingComplete('weighing options', 'sig_abc'),
+            new TextDelta('Let me look'),
+        ]));
+
+        $stream = $this->client($platform)->streamChat($this->helloRequest());
+        iterator_to_array($stream, false);
+        $turn = $stream->getReturn();
+
+        self::assertSame('weighing options', $turn->getReasoning()[0]->getText());
+        self::assertSame('sig_abc', $turn->getReasoning()[0]->getSignature());
+        self::assertSame('Let me look', $turn->getText());
+    }
+
+    public function test_streaming_reports_no_reasoning_when_the_provider_sent_none(): void
+    {
+        $platform = new FakePlatform(new FakeResult(null, null, [new TextDelta('Hi')]));
+
+        $stream = $this->client($platform)->streamChat($this->helloRequest());
+        iterator_to_array($stream, false);
+
+        self::assertSame([], $stream->getReturn()->getReasoning());
     }
 
     /**
@@ -875,6 +1040,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
         );
     }
 
@@ -988,7 +1154,7 @@ final class SymfonyAiClientChatTest extends TestCase
 
     public function test_streaming_honours_the_same_override(): void
     {
-        $platform = new FakePlatform(new FakeResult(new TextResult('Hi')));
+        $platform = new FakePlatform(new FakeResult(null, null, [new TextDelta('Hi')]));
 
         $stream = $this->client($platform)->streamChat($this->helloRequest(), ['model' => 'o1-mini']);
         iterator_to_array($stream);
@@ -1104,6 +1270,11 @@ final class FakePlatform
 
 /**
  * Stand-in for a DeferredResult, which is impractical to construct directly.
+ *
+ * getResult() falls back to itself for a streamed fixture (no buffered $result was ever given),
+ * mirroring the real pairing of DeferredResult::getResult() returning the StreamResult that
+ * reassembles the turn: SymfonyAiClient::extractStreamedReasoning() reads getAssistantMessage() off
+ * exactly that return value.
  */
 final class FakeResult
 {
@@ -1121,7 +1292,7 @@ final class FakeResult
             throw $this->resultFailure;
         }
 
-        return $this->result;
+        return $this->result ?? $this;
     }
 
     public function getMetadata(): Metadata
@@ -1132,5 +1303,17 @@ final class FakeResult
     public function asStream(): \Generator
     {
         yield from $this->deltas;
+    }
+
+    public function getAssistantMessage(): AssistantMessage
+    {
+        $listener = new AssistantMessageStreamListener();
+        foreach ($this->deltas as $delta) {
+            if ($delta instanceof DeltaInterface) {
+                $listener->accumulate($delta);
+            }
+        }
+
+        return $listener->getAssistantMessage();
     }
 }

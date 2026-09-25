@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same way a buffered call already could. See `docs/CONSUMING.md`'s new "Typed exceptions"
   section for the full mapping and which bridges (Ollama, HuggingFace, Azure, OpenRouter, LM
   Studio) report less than the rest.
+- **Reasoning is carried between tool-loop turns instead of being dropped.** Providers that think
+  before answering (Anthropic with extended thinking, OpenAI/Azure's Responses API, Gemini) return
+  a reasoning block alongside the turn and expect it echoed back unchanged on the next request; a
+  tool loop that only replayed text and tool calls made the model redo its reasoning every round,
+  and dropping a required block from a replayed Anthropic turn could fail the call outright.
+  `ChatResponseInterface::getReasoning()` and the new `Api\Data\ReasoningInterface` (`getText()`,
+  an opaque `getSignature()` this module never inspects, edits or renders) expose it;
+  `ChatMessageInterface::getReasoning()` and `ChatRequestInterface::withAssistantTurn()` carry it
+  onto the replayed assistant turn automatically, so an existing tool loop gets this for free.
+  `SymfonyAiClient` reads it from `ThinkingResult` parts on a buffered call and from
+  `StreamResult::getAssistantMessage()` on a streamed one (the one place a stream's signature,
+  sometimes only reported after its block has closed, can be read whole), and rebuilds it as a
+  `Thinking` content part — leading the turn's other content, which Anthropic requires — when
+  replaying an assistant message. OpenAI and Azure additionally need `include:
+  ["reasoning.encrypted_content"]` on the request for the item to come back at all;
+  `SymfonyAiClient` now adds it for any service whose bridge declares the `openai_responses`
+  dialect, keeping a caller's own `include` values. Providers that report no reasoning return an
+  empty list, so nothing changes for them.
 - **AI usage tracking**: every call made through `AiClientInterface` is now recorded — token
   counts and metadata only, **never prompt or response content** — and surfaced at
   **Reports > AI Token Usage** as a dashboard (totals, period-over-period change against the same
@@ -151,6 +169,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unit tests for the `EncryptedServices` placeholder round-trip and `SensitiveDataProcessor` masking/restore.
 
 ### Changed
+- **BREAKING:** `Api\Data\ChatResponseInterface` and `Api\Data\ChatMessageInterface` each gained
+  `getReasoning(): array` (a list of the new `Api\Data\ReasoningInterface`), which carries a
+  model's reasoning between tool-loop turns. Custom implementations of either must add it; the
+  bundled `Model\Chat\ChatResponse` and `Model\Chat\ChatMessage` already do, returning an empty
+  list when there is none.
+- **BREAKING:** `Model\Client\SymfonyAiClient::__construct()` takes a new required
+  `Model\Client\BridgeRegistry $bridgeRegistry` argument, directly after `AiExceptionMapper
+  $exceptionMapper` and before the trailing `?string $consumer`. It decides which services need
+  the Responses API's reasoning `include`. The ObjectManager resolves it for every client built
+  through `ClientFactory`; code constructing `SymfonyAiClient` directly must pass one.
 - **BREAKING:** `Api\Data\StreamChunkType` gained `ThinkingStart` and `ToolCallStart`. A bridge
   that reports the platform's `ThinkingStart`, `ToolCallStart` or `ToolInputDelta` delta — the
   Anthropic bridge does, for both signals, as soon as the model opens a thinking or tool-use block

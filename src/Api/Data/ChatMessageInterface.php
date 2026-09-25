@@ -31,6 +31,17 @@ interface ChatMessageInterface
     public function getToolCalls(): array;
 
     /**
+     * Reasoning blocks this assistant turn carried, oldest first; empty for every other role.
+     *
+     * Carried opaque, exactly as {@see ChatResponseInterface::getReasoning()} returned it, so a
+     * tool loop that stores this message and replays it later sends the provider back what it
+     * originally issued.
+     *
+     * @return list<ReasoningInterface>
+     */
+    public function getReasoning(): array;
+
+    /**
      * The tool call this message answers, for tool-role messages only.
      *
      * The whole call rather than its id: providers want the invocation echoed back alongside its

@@ -12,6 +12,7 @@ use MageOS\AiBase\Api\Data\ChatRequestInterface;
 use MageOS\AiBase\Api\Data\ChatResponseInterface;
 use MageOS\AiBase\Api\Data\FinishReason;
 use MageOS\AiBase\Api\Data\MessageRole;
+use MageOS\AiBase\Api\Data\ReasoningInterface;
 use MageOS\AiBase\Api\Data\StreamChunkInterface;
 use MageOS\AiBase\Api\Data\StreamChunkType;
 use MageOS\AiBase\Api\Data\TokenUsageInterface;
@@ -20,6 +21,7 @@ use MageOS\AiBase\Api\Data\UsageRecordInterface;
 use MageOS\AiBase\Model\Chat\ChatMessage;
 use MageOS\AiBase\Model\Chat\ChatRequest;
 use MageOS\AiBase\Model\Chat\ChatResponse;
+use MageOS\AiBase\Model\Chat\Reasoning;
 use MageOS\AiBase\Model\Chat\StreamChunk;
 use MageOS\AiBase\Model\Chat\TokenUsage;
 use MageOS\AiBase\Model\Chat\ToolCall;
@@ -79,6 +81,21 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
     private const TOOL_EXECUTION_PLACEHOLDER_METHOD = 'toolsAreExecutedByTheConsumer';
 
     /**
+     * Dialect of the bridges whose Responses API drops a reasoning item unless it is asked for.
+     */
+    private const DIALECT_OPENAI_RESPONSES = 'openai_responses';
+
+    /**
+     * Request option naming which optional items the Responses API should include in its reply.
+     */
+    private const OPTION_INCLUDE = 'include';
+
+    /**
+     * Include value that makes a reasoning item's encrypted content come back at all.
+     */
+    private const INCLUDE_REASONING_ENCRYPTED_CONTENT = 'reasoning.encrypted_content';
+
+    /**
      * @param \Symfony\AI\Platform\PlatformInterface $platform
      * @param non-empty-string $model Guaranteed by ClientFactory, which refuses a row without one
      * @param string $serviceCode
@@ -88,6 +105,10 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
      *        per this service's bridge; see {@see toAiBaseUsage()}
      * @param AiExceptionMapper $exceptionMapper Turns a symfony/ai failure into this module's own
      *        typed exception; see {@see wrap()}
+     * @param BridgeRegistry $bridgeRegistry Says which request-option dialect this service speaks,
+     *        so the reasoning-include workaround below applies only to the bridges that need it.
+     *        Required, like the normalizers, because Magento only auto-wires a required class-typed
+     *        argument and compiles an optional one's default into generated/metadata as a value
      * @param string|null $consumer Feature or module the factory attributed this client to;
      *        read back, normalized, through getConsumer()
      */
@@ -99,6 +120,7 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
         private readonly OptionNormalizer $optionNormalizer,
         private readonly UsageNormalizer $usageNormalizer,
         private readonly AiExceptionMapper $exceptionMapper,
+        private readonly BridgeRegistry $bridgeRegistry,
         private readonly ?string $consumer = null,
     ) {
     }
@@ -180,7 +202,52 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
             $usage,
             $this->extractFinishReason($result),
             $this->extractRawFinishReason($result),
+            $this->extractStreamedReasoning($result),
         );
+    }
+
+    /**
+     * The reasoning blocks a finished stream carried, read off the turn the platform reassembled.
+     *
+     * A stream's thinking arrives as deltas spread across many events, some bridges emitting a
+     * signature only after its block has closed. {@see \Symfony\AI\Platform\Result\StreamResult}
+     * already does that reassembly for every consumer of `getAssistantMessage()`; reading it here
+     * rather than re-tracking deltas in this method keeps that one reassembly the only one that has
+     * to match each bridge's own delta order. Called once the loop over deltas has finished, which
+     * is exactly the "deltas of interest already consumed" case that method documents as safe.
+     *
+     * getResult() rather than the DeferredResult itself: getAssistantMessage() lives on the
+     * StreamResult it converts to, and asStream() above already forced and cached that conversion,
+     * so this is the same object the deltas were read from, not a second pass over the stream.
+     *
+     * @param \Symfony\AI\Platform\Result\DeferredResult $result
+     * @return list<Reasoning>
+     */
+    private function extractStreamedReasoning(object $result): array
+    {
+        $reasoning = [];
+        foreach ($this->streamedThinking($result) as $thinking) {
+            $reasoning[] = new Reasoning((string) $thinking->getContent(), $thinking->getSignature());
+        }
+
+        return $reasoning;
+    }
+
+    /**
+     * The thinking parts of a finished stream's reassembled turn.
+     *
+     * `getAssistantMessage()` lives on StreamResult, one of many possible ResultInterface
+     * implementations, so DeferredResult::getResult() only promises the wider interface. A call
+     * made with `stream => true` always converts to StreamResult; that guarantee comes from how
+     * this class itself drives the platform, not from anything the platform's own types can state.
+     *
+     * @param \Symfony\AI\Platform\Result\DeferredResult $result
+     * @return list<\Symfony\AI\Platform\Message\Content\Thinking>
+     */
+    private function streamedThinking(object $result): array
+    {
+        // @phpstan-ignore method.notFound, method.nonObject, return.type
+        return $result->getResult()->getAssistantMessage()->getThinking();
     }
 
     /**
@@ -265,7 +332,7 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
      */
     public function normalizeOptions(array $options): array
     {
-        return $this->optionNormalizer->normalize($this->serviceCode, $options);
+        return $this->withReasoningInclude($this->optionNormalizer->normalize($this->serviceCode, $options));
     }
 
     /**
@@ -300,6 +367,35 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
         } catch (\Throwable $e) {
             throw $this->wrap($e);
         }
+    }
+
+    /**
+     * Ask the Responses API to include a reasoning item's encrypted content.
+     *
+     * OpenAI and Azure both speak the Responses API, and it drops the reasoning item from the reply
+     * unless the request explicitly lists it under `include`, whether or not extended reasoning was
+     * ever otherwise requested. Every other dialect returns what it has without being asked. A
+     * caller who already addressed `include` directly keeps whatever else they listed: this only
+     * adds the one value needed for {@see toChatResponse()} and {@see toAssistantParts()} to carry
+     * reasoning through at all.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private function withReasoningInclude(array $options): array
+    {
+        if ($this->bridgeRegistry->getDialect($this->serviceCode) !== self::DIALECT_OPENAI_RESPONSES) {
+            return $options;
+        }
+
+        $include = $options[self::OPTION_INCLUDE] ?? [];
+        $include = is_array($include) ? array_values($include) : [$include];
+        if (!in_array(self::INCLUDE_REASONING_ENCRYPTED_CONTENT, $include, true)) {
+            $include[] = self::INCLUDE_REASONING_ENCRYPTED_CONTENT;
+        }
+        $options[self::OPTION_INCLUDE] = $include;
+
+        return $options;
     }
 
     /**
@@ -374,22 +470,44 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
     }
 
     /**
-     * Content parts of an assistant turn: its text, then any tool calls it requested.
+     * Content parts of an assistant turn: its reasoning, then its text, then any tool calls.
      *
-     * The text is dropped when empty, because a model that only requested tools wrote none and an
-     * empty text part is not something every provider accepts.
+     * Reasoning goes first because a provider that requires it back (Anthropic with thinking
+     * enabled) rejects a turn where it does not lead the other content. The text is dropped when
+     * empty, because a model that only requested tools wrote none and an empty text part is not
+     * something every provider accepts.
      *
      * @param ChatMessageInterface $message
-     * @return list<string|object> Text first, then one platform ToolCall per requested call
+     * @return list<string|object> Reasoning first, then text, then one platform ToolCall per call
      */
     private function toAssistantParts(ChatMessageInterface $message): array
     {
-        $parts = $message->getContent() === '' ? [] : [$message->getContent()];
+        $parts = array_map(
+            fn (ReasoningInterface $reasoning): object => $this->toPlatformThinking($reasoning),
+            $message->getReasoning(),
+        );
+
+        if ($message->getContent() !== '') {
+            $parts[] = $message->getContent();
+        }
         foreach ($message->getToolCalls() as $toolCall) {
             $parts[] = $this->toPlatformToolCall($toolCall);
         }
 
         return $parts;
+    }
+
+    /**
+     * Translate a reasoning block into the platform's own content part.
+     *
+     * @param ReasoningInterface $reasoning
+     * @return \Symfony\AI\Platform\Message\Content\Thinking
+     */
+    private function toPlatformThinking(ReasoningInterface $reasoning): object
+    {
+        $thinkingClass = \Symfony\AI\Platform\Message\Content\Thinking::class;
+
+        return new $thinkingClass($reasoning->getText(), $reasoning->getSignature());
     }
 
     /**
@@ -457,6 +575,7 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
             $this->extractUsage($result),
             $this->extractFinishReason($result),
             $this->extractRawFinishReason($result),
+            $this->extractReasoning($parts),
         );
     }
 
@@ -510,6 +629,24 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
         }
 
         return $toolCalls;
+    }
+
+    /**
+     * Collect every reasoning block across the result's parts, oldest first.
+     *
+     * @param list<\Symfony\AI\Platform\Result\ResultInterface> $parts
+     * @return list<Reasoning>
+     */
+    private function extractReasoning(array $parts): array
+    {
+        $reasoning = [];
+        foreach ($parts as $part) {
+            if ($part instanceof \Symfony\AI\Platform\Result\ThinkingResult) {
+                $reasoning[] = new Reasoning((string) $part->getContent(), $part->getSignature());
+            }
+        }
+
+        return $reasoning;
     }
 
     /**

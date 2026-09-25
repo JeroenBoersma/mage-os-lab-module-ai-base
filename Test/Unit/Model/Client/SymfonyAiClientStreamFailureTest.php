@@ -211,6 +211,7 @@ final class SymfonyAiClientStreamFailureTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
         );
     }
 

@@ -209,9 +209,18 @@ for ($i = 0; $i < $maxIterations; $i++) {
 
 `ChatRequestInterface` is immutable, so each iteration gets a fresh request and nothing leaks
 into one a caller still holds. Two methods carry the two halves of a turn that are easy to get
-wrong: `withAssistantTurn()` puts the model's own message back with its tool calls attached
-(append the text and forget the calls, and the provider rejects results answering calls it
-cannot see), and `withToolResult()` binds each result to the call that produced it.
+wrong: `withAssistantTurn()` puts the model's own message back with its tool calls and any
+reasoning blocks attached (append the text and forget the calls, and the provider rejects results
+answering calls it cannot see; drop a required reasoning block and a provider that demands it back
+rejects the whole turn instead), and `withToolResult()` binds each result to the call that
+produced it.
+
+Reasoning belongs to the service that produced it. Its signature is only meaningful to that
+provider, and the Anthropic and Gemini bridges pass a foreign one on as if it were their own,
+which the provider is likely to reject. If you store a transcript and replay it later, drop the
+reasoning from stored assistant turns whenever the service has changed since, for instance
+because an administrator picked a different one in between. Replaying to the same service is
+what it is for.
 
 ### Streaming
 
