@@ -286,6 +286,7 @@ final class ClientFactoryTest extends TestCase
                 new OptionNormalizer(new BridgeRegistry([])),
                 new UsageNormalizer(new BridgeRegistry([])),
                 new AiExceptionMapper(),
+                new BridgeRegistry([]),
                 $data['consumer'],
             )
         );
@@ -341,6 +342,7 @@ final class ClientFactoryTest extends TestCase
                 new OptionNormalizer(new BridgeRegistry([])),
                 new UsageNormalizer(new BridgeRegistry([])),
                 new AiExceptionMapper(),
+                new BridgeRegistry([]),
                 $data['consumer'],
             )
         );
@@ -573,6 +575,7 @@ final class ClientFactoryTest extends TestCase
                 new OptionNormalizer(new BridgeRegistry([])),
                 new UsageNormalizer(new BridgeRegistry([])),
                 new AiExceptionMapper(),
+                new BridgeRegistry([]),
                 $data['consumer'],
             )
         );
@@ -652,6 +655,7 @@ final class ClientFactoryTest extends TestCase
                 new OptionNormalizer(new BridgeRegistry([])),
                 new UsageNormalizer(new BridgeRegistry([])),
                 new AiExceptionMapper(),
+                new BridgeRegistry([]),
                 $data['consumer'],
             )
         );
@@ -686,6 +690,7 @@ final class ClientFactoryTest extends TestCase
                 new OptionNormalizer(new BridgeRegistry([])),
                 new UsageNormalizer(new BridgeRegistry([])),
                 new AiExceptionMapper(),
+                new BridgeRegistry([]),
                 $data['consumer'],
             )
         );

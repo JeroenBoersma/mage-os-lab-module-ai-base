@@ -205,6 +205,13 @@ answering calls it cannot see; drop a required reasoning block and a provider th
 rejects the whole turn instead), and `withToolResult()` binds each result to the call that
 produced it.
 
+Reasoning belongs to the service that produced it. Its signature is only meaningful to that
+provider, and the Anthropic and Gemini bridges pass a foreign one on as if it were their own,
+which the provider is likely to reject. If you store a transcript and replay it later, drop the
+reasoning from stored assistant turns whenever the service has changed since, for instance
+because an administrator picked a different one in between. Replaying to the same service is
+what it is for.
+
 ### Streaming
 
 `streamChat()` returns a `\Generator`, so you drive the loop and may stop early:

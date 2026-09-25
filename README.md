@@ -157,6 +157,7 @@ $response->getText();
 $response->getToolCalls();
 $response->getUsage();
 $response->getFinishReason();     // normalized across providers; Length means truncated
+$response->getReasoning();        // opaque; withAssistantTurn() carries it into the next turn
 
 $stream = $client->streamChat($request);
 foreach ($stream as $chunk) {

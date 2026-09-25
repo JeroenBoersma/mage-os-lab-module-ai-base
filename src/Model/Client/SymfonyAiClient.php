@@ -105,10 +105,12 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
      *        per this service's bridge; see {@see toAiBaseUsage()}
      * @param AiExceptionMapper $exceptionMapper Turns a symfony/ai failure into this module's own
      *        typed exception; see {@see wrap()}
+     * @param BridgeRegistry $bridgeRegistry Says which request-option dialect this service speaks,
+     *        so the reasoning-include workaround below applies only to the bridges that need it.
+     *        Required, like the normalizers, because Magento only auto-wires a required class-typed
+     *        argument and compiles an optional one's default into generated/metadata as a value
      * @param string|null $consumer Feature or module the factory attributed this client to;
      *        read back, normalized, through getConsumer()
-     * @param BridgeRegistry $bridgeRegistry Says which request-option dialect this service speaks,
-     *        so the reasoning-include workaround below applies only to the bridges that need it
      */
     public function __construct(
         private readonly object $platform,
@@ -118,8 +120,8 @@ class SymfonyAiClient implements AiClientInterface, PlatformAwareInterface
         private readonly OptionNormalizer $optionNormalizer,
         private readonly UsageNormalizer $usageNormalizer,
         private readonly AiExceptionMapper $exceptionMapper,
+        private readonly BridgeRegistry $bridgeRegistry,
         private readonly ?string $consumer = null,
-        private readonly BridgeRegistry $bridgeRegistry = new BridgeRegistry(),
     ) {
     }
 

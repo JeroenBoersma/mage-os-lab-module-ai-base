@@ -168,6 +168,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unit tests for the `EncryptedServices` placeholder round-trip and `SensitiveDataProcessor` masking/restore.
 
 ### Changed
+- **BREAKING:** `Api\Data\ChatResponseInterface` and `Api\Data\ChatMessageInterface` each gained
+  `getReasoning(): array` (a list of the new `Api\Data\ReasoningInterface`), which carries a
+  model's reasoning between tool-loop turns. Custom implementations of either must add it; the
+  bundled `Model\Chat\ChatResponse` and `Model\Chat\ChatMessage` already do, returning an empty
+  list when there is none.
+- **BREAKING:** `Model\Client\SymfonyAiClient::__construct()` takes a new required
+  `Model\Client\BridgeRegistry $bridgeRegistry` argument, directly after `AiExceptionMapper
+  $exceptionMapper` and before the trailing `?string $consumer`. It decides which services need
+  the Responses API's reasoning `include`. The ObjectManager resolves it for every client built
+  through `ClientFactory`; code constructing `SymfonyAiClient` directly must pass one.
 - **BREAKING:** `Api\Data\StreamChunkType` gained `ThinkingStart` and `ToolCallStart`. A bridge
   that reports the platform's `ThinkingStart`, `ToolCallStart` or `ToolInputDelta` delta — the
   Anthropic bridge does, for both signals, as soon as the model opens a thinking or tool-use block

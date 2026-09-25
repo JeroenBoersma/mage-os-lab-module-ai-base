@@ -548,6 +548,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
         );
 
         self::assertSame(UsageRecordInterface::CONSUMER_UNKNOWN, $client->getConsumer());
@@ -567,6 +568,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
             '   ',
         );
 
@@ -603,6 +605,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
         );
 
         self::assertInstanceOf(PlatformInterface::class, $client->getPlatform());
@@ -808,7 +811,8 @@ final class SymfonyAiClientChatTest extends TestCase
             '_row_1',
             $this->optionNormalizer(),
             $this->usageNormalizer(),
-            bridgeRegistry: new BridgeRegistry(['openai' => ['dialect' => 'openai_responses']]),
+            new AiExceptionMapper(),
+            new BridgeRegistry(['openai' => ['dialect' => 'openai_responses']]),
         );
 
         $client->chat($this->helloRequest());
@@ -826,7 +830,8 @@ final class SymfonyAiClientChatTest extends TestCase
             '_row_1',
             $this->optionNormalizer(),
             $this->usageNormalizer(),
-            bridgeRegistry: new BridgeRegistry(['anthropic' => ['dialect' => 'anthropic_messages']]),
+            new AiExceptionMapper(),
+            new BridgeRegistry(['anthropic' => ['dialect' => 'anthropic_messages']]),
         );
 
         $client->chat($this->helloRequest());
@@ -849,7 +854,8 @@ final class SymfonyAiClientChatTest extends TestCase
             '_row_1',
             $this->optionNormalizer(),
             $this->usageNormalizer(),
-            bridgeRegistry: new BridgeRegistry(['openai' => ['dialect' => 'openai_responses']]),
+            new AiExceptionMapper(),
+            new BridgeRegistry(['openai' => ['dialect' => 'openai_responses']]),
         );
 
         $client->chat($this->helloRequest(), ['include' => ['file_search_call.results']]);
@@ -1034,6 +1040,7 @@ final class SymfonyAiClientChatTest extends TestCase
             $this->optionNormalizer(),
             $this->usageNormalizer(),
             new AiExceptionMapper(),
+            new BridgeRegistry([]),
         );
     }
 
