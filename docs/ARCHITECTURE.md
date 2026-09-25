@@ -100,7 +100,9 @@ Console/Command/
 2. POST hits `EncryptedServices` (the `backend_model` in `system.xml`):
    - `restoreRow()` — any submitted `******` placeholder is replaced by the previously
      stored (still encrypted) value for that row/service/field, so saving without retyping
-     keeps credentials. Row identity relies on the form reusing stored row IDs.
+     keeps credentials. Row identity relies on the form reusing stored row IDs. Restore is
+     refused (`isRedirected()`) if `base_url`/`endpoint` changed in the same save, so a
+     redirected endpoint can never read back a credential it was never issued.
    - `encryptRow()` — descriptor-flagged fields are encrypted with Magento's
      `EncryptorInterface`. Encryption is idempotent: values already carrying the encryptor
      envelope (`N:N:...`) are left alone.
@@ -280,6 +282,9 @@ saves so credential restore can match rows.
   applies only to rows whose provider class is no longer registered (defense in depth for
   removed third-party modules).
 - **No plaintext in the admin**: masked on load, restored on save (see flows above).
+  Restore also refuses to carry a masked credential across an edited `base_url`/
+  `endpoint` in the same save, since that would let a redirected endpoint read back a
+  credential it was never issued.
 - **Legacy tolerance**: values without the encryptor envelope are treated as plaintext and
   pass through reads unchanged; they get encrypted on the next admin save.
 - **CSP**: all form JavaScript is emitted through `SecureHtmlRenderer` (hash/nonce), safe
