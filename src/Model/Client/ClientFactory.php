@@ -284,7 +284,7 @@ class ClientFactory implements AiClientFactoryInterface
                 ...$this->optionalArguments($factoryClass, $code, $config),
             ),
             'openai_compatible' => $factoryClass::createPlatform(
-                $this->stringValue($config, 'base_url'),
+                $this->resolveOpenAiCompatibleBaseUrl($config),
                 $this->stringValue($config, 'api_key') ?: null,
                 ...$this->optionalArguments($factoryClass, $code, $config),
             ),
@@ -490,5 +490,23 @@ class ClientFactory implements AiClientFactoryInterface
         $baseUrl = is_string($baseUrl) && trim($baseUrl) !== '' ? trim($baseUrl) : $default;
 
         return rtrim($baseUrl, '/');
+    }
+
+    /**
+     * Read the openai_compatible base URL, stripping a trailing API version segment.
+     *
+     * {@see \Symfony\AI\Platform\Bridge\Generic\Factory::createPlatform()}'s bridge always appends
+     * `/v1/chat/completions` itself, so an administrator pasting the `/v1`-suffixed URL their gateway
+     * shows them (as LiteLLM and most OpenAI-compatible gateways do) would otherwise double it into a
+     * path the gateway 404s on, with nothing in the response pointing at why.
+     *
+     * @param array<string,mixed> $config Stored service configuration
+     * @return string
+     */
+    private function resolveOpenAiCompatibleBaseUrl(array $config): string
+    {
+        $baseUrl = rtrim(trim($this->stringValue($config, 'base_url')), '/');
+
+        return preg_replace('#/v1$#', '', $baseUrl);
     }
 }

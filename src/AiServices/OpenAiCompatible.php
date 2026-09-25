@@ -56,7 +56,7 @@ class OpenAiCompatible implements AiServiceConfigurationInterface
     public function getConfigurationFields(): array
     {
         return [
-            $this->baseUrlField($this->fieldFactory, ''),
+            $this->baseUrlField($this->fieldFactory, '', 'Base URL (will strip /v1)'),
             $this->apiKeyField($this->fieldFactory),
             $this->freeTextModelField($this->fieldFactory),
         ];
