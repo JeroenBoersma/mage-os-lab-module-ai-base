@@ -156,6 +156,169 @@ final class OptionNormalizerTest extends TestCase
         self::assertSame($options, $this->subject()->normalize('some_third_party', $options));
     }
 
+    /**
+     * Anthropic has no "required" tool choice of its own; its API calls the same concept "any".
+     * Proves the value, not only the option name, gets translated.
+     */
+    public function test_translates_a_scalar_tool_choice_value_the_provider_spells_differently(): void
+    {
+        $normalized = $this->subject()->normalize('anthropic', ['tool_choice' => 'required']);
+
+        self::assertSame(['type' => 'any'], $normalized['tool_choice']);
+    }
+
+    /**
+     * Forcing one named tool is the one canonical value that is not a plain string: the caller
+     * hands over `['tool' => 'name']` and the target shape has to carry that name to wherever the
+     * provider expects it, nested arbitrarily deep.
+     */
+    public function test_substitutes_the_tool_name_into_the_providers_own_shape(): void
+    {
+        $normalized = $this->subject()->normalize('anthropic', ['tool_choice' => ['tool' => 'classify_product']]);
+
+        self::assertSame(['type' => 'tool', 'name' => 'classify_product'], $normalized['tool_choice']);
+    }
+
+    /**
+     * Chat-completions dialects nest the tool name one level deeper than Anthropic does, so this
+     * also proves the placeholder substitution walks into nested arrays, not just the top level.
+     */
+    public function test_substitutes_the_tool_name_into_a_nested_provider_shape(): void
+    {
+        $normalizer = new OptionNormalizer(
+            new BridgeRegistry(['openrouter' => ['dialect' => 'openai_chat']]),
+            [
+                'openai_chat' => [
+                    'values' => [
+                        'tool_choice' => [
+                            'tool' => ['tool_choice' => ['type' => 'function', 'function' => ['name' => '{{name}}']]],
+                        ],
+                    ],
+                ],
+            ]
+        );
+
+        $normalized = $normalizer->normalize('openrouter', ['tool_choice' => ['tool' => 'classify_product']]);
+
+        self::assertSame(
+            ['type' => 'function', 'function' => ['name' => 'classify_product']],
+            $normalized['tool_choice']
+        );
+    }
+
+    /**
+     * A single canonical option spreading across two top-level request fields (Anthropic's
+     * `thinking` plus `output_config`) is exactly why value translation cannot be a rename: one
+     * key in, several keys out.
+     */
+    public function test_a_value_mapped_option_can_expand_into_several_target_keys(): void
+    {
+        $normalized = $this->subject()->normalize('anthropic', ['reasoning_effort' => 'low']);
+
+        self::assertSame(['type' => 'adaptive'], $normalized['thinking']);
+        self::assertSame(['effort' => 'low'], $normalized['output_config']);
+    }
+
+    /**
+     * `none` only needs to disable thinking; there is nothing sensible to put in `output_config`,
+     * so that key must not appear at all.
+     */
+    public function test_a_value_mapped_option_can_set_only_some_of_its_possible_keys(): void
+    {
+        $normalized = $this->subject()->normalize('anthropic', ['reasoning_effort' => 'none']);
+
+        self::assertSame(['type' => 'disabled'], $normalized['thinking']);
+        self::assertArrayNotHasKey('output_config', $normalized);
+    }
+
+    /**
+     * `auto` is every provider's own default, so a dialect that never translates tool_choice at
+     * all (Ollama has no such concept) is left alone rather than failing a call that only asked
+     * for what the provider already does anyway.
+     */
+    public function test_auto_tool_choice_is_a_silent_no_op_where_the_provider_has_no_equivalent(): void
+    {
+        $normalized = $this->subjectWithOllama()->normalize('ollama', ['tool_choice' => 'auto']);
+
+        self::assertArrayNotHasKey('tool_choice', $normalized);
+    }
+
+    /**
+     * Unlike `auto`, `required` asks for behaviour Ollama cannot provide, so silently dropping it
+     * would leave the caller believing a tool call is forced when none is.
+     */
+    public function test_a_non_auto_tool_choice_is_refused_where_the_provider_has_no_equivalent(): void
+    {
+        $this->expectException(AiRequestNotSentException::class);
+        $this->expectExceptionMessage('"required" value of the "tool_choice" option is not supported by AI service "ollama"');
+
+        $this->subjectWithOllama()->normalize('ollama', ['tool_choice' => 'required']);
+    }
+
+    /**
+     * Ollama's `think` field is the reasoning-effort equivalent, spelled as a plain boolean for
+     * "none" and a level string otherwise.
+     */
+    public function test_reasoning_effort_is_translated_for_a_provider_with_its_own_vocabulary(): void
+    {
+        $normalized = $this->subjectWithOllama()->normalize('ollama', ['reasoning_effort' => 'none']);
+
+        self::assertSame(false, $normalized['think']);
+    }
+
+    /**
+     * Same rule as the four original options: addressing the provider's own field directly wins
+     * over the neutral one, even when the neutral option expands into that same field.
+     */
+    public function test_the_providers_own_field_wins_over_a_value_mapped_option(): void
+    {
+        $normalized = $this->subject()->normalize('anthropic', [
+            'reasoning_effort' => 'high',
+            'thinking' => ['type' => 'enabled'],
+        ]);
+
+        self::assertSame(['type' => 'enabled'], $normalized['thinking']);
+        self::assertSame(['effort' => 'high'], $normalized['output_config']);
+    }
+
+    /**
+     * `tool_choice` is also Anthropic's own option name, so a caller who already forces a tool in
+     * Anthropic's shape addressed the provider directly. That reached the wire untouched before
+     * the option became canonical, and has to keep doing so.
+     */
+    public function test_a_provider_native_tool_choice_passes_through_untouched(): void
+    {
+        $native = ['type' => 'tool', 'name' => 'get_orders'];
+
+        $normalized = $this->subject()->normalize('anthropic', ['tool_choice' => $native]);
+
+        self::assertSame($native, $normalized['tool_choice']);
+    }
+
+    /**
+     * A string outside the canonical set is a provider-native value too (OpenAI's "minimal"
+     * effort), not a request for something the provider lacks, so it is not refused.
+     */
+    public function test_a_non_canonical_string_value_passes_through_untouched(): void
+    {
+        $normalized = $this->subjectWithOllama()->normalize('ollama', ['reasoning_effort' => 'minimal']);
+
+        self::assertSame(['reasoning_effort' => 'minimal'], $normalized);
+    }
+
+    /**
+     * Ollama has no tool_choice translation, but a native value is still the caller's business:
+     * only a canonical value the dialect cannot express is refused.
+     */
+    public function test_a_provider_native_tool_choice_is_not_refused_where_no_translation_exists(): void
+    {
+        $native = ['type' => 'function', 'function' => ['name' => 'get_orders']];
+
+        $normalized = $this->subjectWithOllama()->normalize('ollama', ['tool_choice' => $native]);
+
+        self::assertSame($native, $normalized['tool_choice']);
+    }
+
     private function subject(): OptionNormalizer
     {
         return new OptionNormalizer(
@@ -180,6 +343,44 @@ final class OptionNormalizerTest extends TestCase
                     'lists' => ['stop'],
                     // A string, because that is literally what di.xml's `number` interpreter yields.
                     'defaults' => ['max_tokens' => '4096'],
+                    'values' => [
+                        'tool_choice' => [
+                            'auto' => ['tool_choice' => ['type' => 'auto']],
+                            'none' => ['tool_choice' => ['type' => 'none']],
+                            'required' => ['tool_choice' => ['type' => 'any']],
+                            'tool' => ['tool_choice' => ['type' => 'tool', 'name' => '{{name}}']],
+                        ],
+                        'reasoning_effort' => [
+                            'none' => ['thinking' => ['type' => 'disabled']],
+                            'low' => ['thinking' => ['type' => 'adaptive'], 'output_config' => ['effort' => 'low']],
+                            'medium' => ['thinking' => ['type' => 'adaptive'], 'output_config' => ['effort' => 'medium']],
+                            'high' => ['thinking' => ['type' => 'adaptive'], 'output_config' => ['effort' => 'high']],
+                        ],
+                    ],
+                ],
+            ]
+        );
+    }
+
+    /**
+     * A separate fixture rather than folding into subject(): Ollama is the one dialect that
+     * declares no tool_choice translation at all, which is the exact shape the no-op and refusal
+     * tests need to exercise.
+     */
+    private function subjectWithOllama(): OptionNormalizer
+    {
+        return new OptionNormalizer(
+            new BridgeRegistry(['ollama' => ['dialect' => 'ollama']]),
+            [
+                'ollama' => [
+                    'values' => [
+                        'reasoning_effort' => [
+                            'none' => ['think' => false],
+                            'low' => ['think' => 'low'],
+                            'medium' => ['think' => 'medium'],
+                            'high' => ['think' => 'high'],
+                        ],
+                    ],
                 ],
             ]
         );

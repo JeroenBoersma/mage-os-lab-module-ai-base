@@ -94,7 +94,7 @@ per-call option was ever set.
 
 ## Options
 
-Four options are provider-neutral and get translated to whatever the configured backend calls
+Six options are provider-neutral and get translated to whatever the configured backend calls
 them, so the same code works whichever one an administrator picked:
 
 | Option | Notes |
@@ -103,6 +103,16 @@ them, so the same code works whichever one an administrator picked:
 | `temperature` | Same name everywhere. |
 | `top_p` | `topP` on Google. |
 | `stop` | `stop_sequences` on Anthropic, `stopSequences` on Google; a single string is wrapped into a list where the provider wants one. **Not supported on OpenAI and Azure**, whose Responses API has no such parameter — passing it there throws rather than being dropped. |
+| `tool_choice` | `auto`, `none`, `required`, or `['tool' => '<name>']` to force one specific tool. Each value is translated too, not only renamed: Anthropic's "required" is `any`. **Not supported on Ollama** — `auto` is a no-op there since it is every provider's own default, anything else throws. |
+| `reasoning_effort` | `none`, `low`, `medium` or `high`. Spreads across more than one request field on some providers (Anthropic sets both `thinking` and `output_config`). |
+
+For `tool_choice` and `reasoning_effort`, only the values listed above are translated. Any other
+value is taken to be the provider's own and sent as written, so code already forcing a tool in
+Anthropic's shape (`['type' => 'tool', 'name' => 'get_orders']`) or asking OpenAI for `minimal`
+effort keeps working. Some of the translated values are only accepted by some models of a
+provider, not all of them; see
+[PROVIDERS.md](PROVIDERS.md#model-dependent-values) before relying on `reasoning_effort: none` or a
+forced tool on Anthropic or Gemini.
 
 Anything else is passed through to the provider untouched, so provider-specific features stay
 reachable (Anthropic's `thinking`, Ollama's `keep_alive`, ...). That is the escape hatch for code

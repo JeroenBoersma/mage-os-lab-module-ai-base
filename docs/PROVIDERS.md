@@ -164,11 +164,11 @@ form tells an administrator to install when the bridge is missing; a provider wi
 bridge omits it and is labelled unsupported instead.
 
 `dialect` names the request-option shape your provider speaks, which decides how the universal
-options (`max_tokens`, `temperature`, `top_p`, `stop`) are spelled on the wire — see
-[CONSUMING.md](CONSUMING.md#options). The shipped dialects are `openai_chat` (the
-`/v1/chat/completions` body most OpenAI-compatible providers use), `openai_responses`,
-`anthropic_messages`, `gemini` and `ollama`; declare your own alongside them on
-`Model\Client\OptionNormalizer` if your provider spells them differently:
+options (`max_tokens`, `temperature`, `top_p`, `stop`, `tool_choice`, `reasoning_effort`) are
+spelled on the wire — see [CONSUMING.md](CONSUMING.md#options). The shipped dialects are
+`openai_chat` (the `/v1/chat/completions` body most OpenAI-compatible providers use),
+`openai_responses`, `anthropic_messages`, `gemini` and `ollama`; declare your own alongside them
+on `Model\Client\OptionNormalizer` if your provider spells them differently:
 
 ```xml
 <type name="MageOS\AiBase\Model\Client\OptionNormalizer">
@@ -187,15 +187,54 @@ options (`max_tokens`, `temperature`, `top_p`, `stop`) are spelled on the wire �
                 <item name="defaults" xsi:type="array">
                     <item name="max_tokens" xsi:type="number">4096</item>
                 </item>
+                <!-- tool_choice and reasoning_effort: canonical value => request fragment to
+                     merge in. {{name}} is replaced with the tool name for `['tool' => '<name>']`. -->
+                <item name="values" xsi:type="array">
+                    <item name="tool_choice" xsi:type="array">
+                        <item name="auto" xsi:type="array">
+                            <item name="tool_choice" xsi:type="string">auto</item>
+                        </item>
+                        <item name="required" xsi:type="array">
+                            <item name="tool_choice" xsi:type="string">required</item>
+                        </item>
+                        <item name="tool" xsi:type="array">
+                            <item name="tool_choice" xsi:type="array">
+                                <item name="type" xsi:type="string">function</item>
+                                <item name="name" xsi:type="string">{{name}}</item>
+                            </item>
+                        </item>
+                    </item>
+                </item>
             </item>
         </argument>
     </arguments>
 </type>
 ```
 
-An option absent from `map` is treated as unsupported by that provider and raises a
-`LocalizedException` naming both, rather than being dropped on the way to the wire. Declaring no
-dialect at all passes every option through untouched.
+An option absent from `map`, or a canonical value absent from `values`, is treated as unsupported
+by that provider and raises a `LocalizedException` naming both, rather than being dropped on the
+way to the wire. The exception is `tool_choice: auto`, which every provider treats as its own
+default and so is a silent no-op wherever a dialect declares no translation for it at all. A value
+outside the canonical set (`auto`, `none`, `required`, `['tool' => '<name>']` for `tool_choice`;
+`none`, `low`, `medium`, `high` for `reasoning_effort`) is the provider's own and passes through
+as written. Declaring no dialect at all passes every option through untouched.
+
+### Model-dependent values
+
+A dialect is chosen per service code, while the model sits on the configured row, so the `values`
+table cannot know which model a request goes to. A few of the shipped translations are accepted by
+some models of a provider and rejected with a 400 by others. A store that hits one of these knows
+to look at the model configured on the row, not at this module:
+
+| Provider | Value | Caveat |
+|---|---|---|
+| Anthropic | `reasoning_effort: none` | Becomes `thinking: {type: "disabled"}`, which models whose thinking is always on reject. |
+| Anthropic | `tool_choice: required`, `['tool' => '<name>']` | Forced tool choice (`any`, `tool`) is rejected by some recent models. |
+| Gemini | `reasoning_effort: none` | Becomes `thinkingBudget: 0`. Models that cannot switch thinking off (2.5 Pro) enforce a minimum budget instead. |
+| Gemini | `reasoning_effort: low`/`medium`/`high` | The token budgets (1024, 8192, 24576) are this module's own choice. Newer models use a named thinking level rather than a budget. |
+
+Where a model needs something else, send the provider's own option instead of the neutral one;
+it wins over the translation.
 
 The factory signatures are verified against **symfony/ai-platform v0.13.0**; the component is
 experimental with no BC promise — pin your version and re-verify on upgrade. Hosted providers

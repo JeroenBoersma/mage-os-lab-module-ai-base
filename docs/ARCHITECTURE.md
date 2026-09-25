@@ -143,7 +143,11 @@ and OpenAI-compatible endpoints reject unknown body fields with a 400, so the sa
 `num_predict` on Ollama, and Anthropic rejects a request that omits it entirely. Which shape a
 provider speaks is the `dialect` on its `BridgeRegistry` entry; the dialects themselves are
 di.xml data, so a third party registering a provider declares one alongside its bridge. Only the
-universal four are touched — everything else reaches the provider verbatim.
+universal options are touched — everything else reaches the provider verbatim. `tool_choice` and
+`reasoning_effort` need their *values* translated too, not only their key (Anthropic's `required`
+is `any`), and one value can expand into several target fields (Anthropic's `reasoning_effort`
+sets both `thinking` and `output_config`), which is what the dialect's `values` table is for; see
+[PROVIDERS.md](PROVIDERS.md#4-wire-a-client-bridge-optional-but-recommended).
 
 Token usage is normalized the same way, once, per bridge: `SymfonyAiClient` hands every raw
 `TokenUsage` object it reads off a result (or a stream delta) to `Model\Client\UsageNormalizer`
