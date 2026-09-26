@@ -227,7 +227,9 @@ re-encrypted the next time the configuration is saved in the admin.
 
 In the admin form, stored credentials are displayed as an obscured `******` placeholder
 instead of the real value. Saving the form without retyping a credential keeps the
-previously stored value; entering a new value replaces it.
+previously stored value; entering a new value replaces it. If `base_url`/`endpoint` is
+edited in the same save, the previously stored credential is not carried over — this
+stops a redirected endpoint from reading back a credential it was never issued.
 
 ### Testing a connection
 
