@@ -16,9 +16,18 @@ namespace MageOS\AiBase\Model\Client;
  * that did not change. Anthropic makes it worse by requiring `max_tokens`, so the same call that
  * worked everywhere else fails there with nothing to point at.
  *
- * Only the universal options are translated (see CANONICAL_OPTIONS). Everything else passes through
- * verbatim, which keeps provider-specific features (Anthropic's `thinking`, Ollama's `keep_alive`,
- * structured output) reachable for a consumer that has deliberately picked its backend.
+ * Only the universal options are translated (see MAPPED_OPTIONS and VALUE_MAPPED_OPTIONS).
+ * Everything else passes through verbatim, which keeps provider-specific features (Anthropic's
+ * `thinking`, Ollama's `keep_alive`, structured output) reachable for a consumer that has
+ * deliberately picked its backend.
+ *
+ * `tool_choice` and `reasoning_effort` need more than a rename: `required` is Anthropic's `any`,
+ * and a single canonical value can spread across several target fields (Anthropic's
+ * `reasoning_effort` sets both `thinking` and `output_config`). `values` in a dialect covers that:
+ * canonical value => the fragment of request keys it becomes, merged into the options rather than
+ * assigned to one renamed key. Forcing one named tool is the one canonical value that is not a
+ * plain string (`['tool' => '<name>']`), so its fragment carries the TOOL_NAME_PLACEHOLDER token
+ * wherever the provider expects the name, substituted in at translation time.
  *
  * Dialects are wired in `di.xml` and the bridge registry says which dialect a service code speaks,
  * so a third party registering a provider declares it in the same entry as its bridge.
@@ -29,19 +38,38 @@ namespace MageOS\AiBase\Model\Client;
  * @phpstan-type Dialect array{
  *     map?: array<string,string>,
  *     lists?: array<array-key, string>,
- *     defaults?: array<string,mixed>
+ *     defaults?: array<string,mixed>,
+ *     values?: array<string, array<string, array<string,mixed>>>
  * }
  * @phpstan-type RequestOptions array<string,mixed>
  */
 class OptionNormalizer
 {
     /**
-     * Provider-neutral option names this class translates.
+     * Provider-neutral option names translated by renaming a single key.
      *
-     * Deliberately small: these four are the ones every provider models, so they are the ones a
-     * consumer can set without knowing which backend an administrator configured.
+     * Deliberately small: these four are the ones every provider models with one field each, so
+     * they are the ones a consumer can set without knowing which backend an administrator
+     * configured.
      */
-    private const CANONICAL_OPTIONS = ['max_tokens', 'temperature', 'top_p', 'stop'];
+    private const MAPPED_OPTIONS = ['max_tokens', 'temperature', 'top_p', 'stop'];
+
+    /**
+     * Provider-neutral option names whose value, not only its key, differs per provider.
+     *
+     * Keyed by option, listing the canonical values each accepts. `required` becomes Anthropic's
+     * `any`; a single value can expand into several target keys. See the `values` dialect key this
+     * class reads for them.
+     *
+     * The value list is what tells a canonical request apart from a provider-native one. For
+     * `tool_choice` the canonical name is also the provider's own on Anthropic, OpenAI, Azure and
+     * every OpenAI-compatible endpoint, so `['type' => 'tool', 'name' => 'x']` is a caller who
+     * addressed Anthropic directly, and it passes through untouched like any other native option.
+     */
+    private const VALUE_MAPPED_OPTIONS = [
+        'tool_choice' => ['auto', 'none', 'required', self::VALUE_KEY_TOOL],
+        'reasoning_effort' => ['none', 'low', 'medium', 'high'],
+    ];
 
     /**
      * Dialect key holding canonical option name => provider option name.
@@ -57,6 +85,31 @@ class OptionNormalizer
      * Dialect key holding values applied when the caller supplied none.
      */
     private const KEY_DEFAULTS = 'defaults';
+
+    /**
+     * Dialect key holding canonical option name => canonical value => target request fragment.
+     */
+    private const KEY_VALUES = 'values';
+
+    /**
+     * Lookup key, within a VALUE_MAPPED_OPTIONS entry of `values`, for the "force this named tool"
+     * shape of `tool_choice`. The only canonical value that is not a plain string.
+     */
+    private const VALUE_KEY_TOOL = 'tool';
+
+    /**
+     * Token inside a `values` fragment that gets replaced with the requested tool's name.
+     */
+    private const TOOL_NAME_PLACEHOLDER = '{{name}}';
+
+    /**
+     * Canonical option => the one value every provider treats as its own default.
+     *
+     * A dialect that declares no translation at all for the option (Ollama has no tool_choice
+     * equivalent) is left alone when the caller asked for this value, rather than refused for a
+     * call that only asked for what the provider already does anyway.
+     */
+    private const NEUTRAL_DEFAULT_VALUES = ['tool_choice' => 'auto'];
 
     /**
      * @param BridgeRegistry $bridgeRegistry Says which dialect each service code speaks
@@ -86,8 +139,12 @@ class OptionNormalizer
             return $options;
         }
 
-        foreach (self::CANONICAL_OPTIONS as $canonical) {
+        foreach (self::MAPPED_OPTIONS as $canonical) {
             $options = $this->applyOption($serviceCode, $dialect, $options, $canonical);
+        }
+
+        foreach (array_keys(self::VALUE_MAPPED_OPTIONS) as $canonical) {
+            $options = $this->applyValueOption($serviceCode, $dialect, $options, $canonical);
         }
 
         return $options;
@@ -158,6 +215,144 @@ class OptionNormalizer
         $options[$target] = $this->castValue($dialect, $canonical, $default);
 
         return $options;
+    }
+
+    /**
+     * Rewrite a value-mapped option into the request fragment its canonical value stands for.
+     *
+     * Unlike applyOption(), the target is not one renamed key: it is whatever set of keys the
+     * dialect's `values` table says this value becomes, merged into the request. That is what
+     * lets Anthropic's `reasoning_effort: low` set both `thinking` and `output_config` from one
+     * canonical option.
+     *
+     * A value that is not one of the option's canonical values is the provider's own and is left
+     * exactly as the caller wrote it, the same escape hatch every unmapped option already has.
+     *
+     * @param string $serviceCode
+     * @param Dialect $dialect
+     * @param RequestOptions $options
+     * @param string $canonical
+     * @return RequestOptions
+     * @throws AiRequestNotSentException When a canonical value has no translation and is not the neutral default
+     */
+    private function applyValueOption(string $serviceCode, array $dialect, array $options, string $canonical): array
+    {
+        if (!array_key_exists($canonical, $options)) {
+            return $options;
+        }
+
+        [$lookupKey, $toolName] = $this->resolveValueLookup($options[$canonical]);
+        if (!in_array($lookupKey, self::VALUE_MAPPED_OPTIONS[$canonical] ?? [], true)) {
+            return $options;
+        }
+
+        unset($options[$canonical]);
+        $fragment = $dialect[self::KEY_VALUES][$canonical][$lookupKey] ?? null;
+
+        if ($fragment === null) {
+            if ($lookupKey === (self::NEUTRAL_DEFAULT_VALUES[$canonical] ?? null)) {
+                return $options;
+            }
+
+            throw new AiRequestNotSentException(__(
+                'The "%1" value of the "%2" option is not supported by AI service "%3". '
+                . 'Remove it, or send the provider\'s own option instead.',
+                $lookupKey,
+                $canonical,
+                $serviceCode
+            ));
+        }
+
+        foreach ($this->substituteToolName($this->castNumericStrings($fragment), $toolName) as $key => $fragmentValue) {
+            if (!array_key_exists($key, $options)) {
+                $options[$key] = $fragmentValue;
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * Which entry of a `values` table a caller's raw option value looks up.
+     *
+     * Also returns the tool name to substitute in when it is the "force this named tool" shape.
+     * Anything that is neither a string nor that shape yields an empty key, which no option
+     * declares as canonical, so it passes through as provider-native.
+     *
+     * @param mixed $value
+     * @return array{0: string, 1: string|null}
+     */
+    private function resolveValueLookup(mixed $value): array
+    {
+        if (is_array($value) && is_string($value[self::VALUE_KEY_TOOL] ?? null)) {
+            return [self::VALUE_KEY_TOOL, $value[self::VALUE_KEY_TOOL]];
+        }
+
+        return [is_string($value) ? $value : '', null];
+    }
+
+    /**
+     * Replace TOOL_NAME_PLACEHOLDER wherever it appears inside a `values` fragment.
+     *
+     * @param array<string,mixed> $fragment
+     * @param string|null $toolName
+     * @return array<string,mixed>
+     */
+    private function substituteToolName(array $fragment, ?string $toolName): array
+    {
+        if ($toolName === null) {
+            return $fragment;
+        }
+
+        return array_map(fn (mixed $item): mixed => $this->substituteValue($item, $toolName), $fragment);
+    }
+
+    /**
+     * Replace TOOL_NAME_PLACEHOLDER in one fragment value, at any depth.
+     *
+     * Recurses because a provider may nest the tool's name arbitrarily deep (Anthropic takes it
+     * directly, OpenAI-compatible chat completions one level further inside `function.name`).
+     *
+     * @param mixed $value
+     * @param string $toolName
+     * @return mixed
+     */
+    private function substituteValue(mixed $value, string $toolName): mixed
+    {
+        if ($value === self::TOOL_NAME_PLACEHOLDER) {
+            return $toolName;
+        }
+
+        return is_array($value)
+            ? array_map(fn (mixed $item): mixed => $this->substituteValue($item, $toolName), $value)
+            : $value;
+    }
+
+    /**
+     * Apply toNumberIfNumeric() across a `values` fragment.
+     *
+     * `di.xml`'s `number` interpreter yields a string the same way it does for `defaults` (see
+     * toNumberIfNumeric()), and a fragment can nest a numeric tier several levels deep.
+     *
+     * @param array<string,mixed> $fragment
+     * @return array<string,mixed>
+     */
+    private function castNumericStrings(array $fragment): array
+    {
+        return array_map(fn (mixed $item): mixed => $this->castNumericValue($item), $fragment);
+    }
+
+    /**
+     * Apply toNumberIfNumeric() to one fragment value, at any depth.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private function castNumericValue(mixed $value): mixed
+    {
+        return is_array($value)
+            ? array_map(fn (mixed $item): mixed => $this->castNumericValue($item), $value)
+            : $this->toNumberIfNumeric($value);
     }
 
     /**

@@ -184,7 +184,19 @@
          model's output ceiling; raise it per request when a longer answer is wanted.
 
          An option absent from a dialect's `map` is not supported by that provider and raises an
-         error naming both, rather than being dropped on the way to the wire. -->
+         error naming both, rather than being dropped on the way to the wire.
+
+         `values` covers `tool_choice` and `reasoning_effort`: a provider's own vocabulary for these
+         differs by value, not only by field name (Anthropic's "required" is "any"), and a single
+         value can spread across more than one target field (Anthropic's reasoning_effort sets both
+         `thinking` and `output_config`), so each canonical value maps to the request fragment it
+         becomes rather than to one renamed key. `{{name}}` inside a fragment is replaced with the
+         tool name when the caller forces one specific tool. Only symfony/ai-open-ai-platform is
+         installed in this repo's dev dependencies, so the OpenAI/Azure Responses shape below is
+         exercised by tests; the Anthropic, Gemini and Ollama shapes follow each provider's public
+         API docs and want confirming against a live call before the accepted values are treated as
+         final, especially Gemini's `thinkingConfig` token-budget tiers, which are this module's own
+         choice of thresholds rather than something the API prescribes. -->
     <type name="MageOS\AiBase\Model\Client\OptionNormalizer">
         <arguments>
             <argument name="dialects" xsi:type="array">
@@ -195,6 +207,41 @@
                         <item name="top_p" xsi:type="string">top_p</item>
                         <item name="stop" xsi:type="string">stop</item>
                     </item>
+                    <item name="values" xsi:type="array">
+                        <item name="tool_choice" xsi:type="array">
+                            <item name="auto" xsi:type="array">
+                                <item name="tool_choice" xsi:type="string">auto</item>
+                            </item>
+                            <item name="none" xsi:type="array">
+                                <item name="tool_choice" xsi:type="string">none</item>
+                            </item>
+                            <item name="required" xsi:type="array">
+                                <item name="tool_choice" xsi:type="string">required</item>
+                            </item>
+                            <item name="tool" xsi:type="array">
+                                <item name="tool_choice" xsi:type="array">
+                                    <item name="type" xsi:type="string">function</item>
+                                    <item name="function" xsi:type="array">
+                                        <item name="name" xsi:type="string">{{name}}</item>
+                                    </item>
+                                </item>
+                            </item>
+                        </item>
+                        <item name="reasoning_effort" xsi:type="array">
+                            <item name="none" xsi:type="array">
+                                <item name="reasoning_effort" xsi:type="string">none</item>
+                            </item>
+                            <item name="low" xsi:type="array">
+                                <item name="reasoning_effort" xsi:type="string">low</item>
+                            </item>
+                            <item name="medium" xsi:type="array">
+                                <item name="reasoning_effort" xsi:type="string">medium</item>
+                            </item>
+                            <item name="high" xsi:type="array">
+                                <item name="reasoning_effort" xsi:type="string">high</item>
+                            </item>
+                        </item>
+                    </item>
                 </item>
                 <!-- The Responses API, which the OpenAI and Azure bridges both target. It renamed
                      max_tokens to max_output_tokens and has no stop-sequence parameter at all. -->
@@ -203,6 +250,50 @@
                         <item name="max_tokens" xsi:type="string">max_output_tokens</item>
                         <item name="temperature" xsi:type="string">temperature</item>
                         <item name="top_p" xsi:type="string">top_p</item>
+                    </item>
+                    <item name="values" xsi:type="array">
+                        <item name="tool_choice" xsi:type="array">
+                            <item name="auto" xsi:type="array">
+                                <item name="tool_choice" xsi:type="string">auto</item>
+                            </item>
+                            <item name="none" xsi:type="array">
+                                <item name="tool_choice" xsi:type="string">none</item>
+                            </item>
+                            <item name="required" xsi:type="array">
+                                <item name="tool_choice" xsi:type="string">required</item>
+                            </item>
+                            <item name="tool" xsi:type="array">
+                                <item name="tool_choice" xsi:type="array">
+                                    <item name="type" xsi:type="string">function</item>
+                                    <item name="name" xsi:type="string">{{name}}</item>
+                                </item>
+                            </item>
+                        </item>
+                        <!-- The Responses API's `reasoning.effort` has no "none" tier of its own;
+                             "minimal" is the lowest it accepts, so that is what the neutral "none"
+                             becomes here. -->
+                        <item name="reasoning_effort" xsi:type="array">
+                            <item name="none" xsi:type="array">
+                                <item name="reasoning" xsi:type="array">
+                                    <item name="effort" xsi:type="string">minimal</item>
+                                </item>
+                            </item>
+                            <item name="low" xsi:type="array">
+                                <item name="reasoning" xsi:type="array">
+                                    <item name="effort" xsi:type="string">low</item>
+                                </item>
+                            </item>
+                            <item name="medium" xsi:type="array">
+                                <item name="reasoning" xsi:type="array">
+                                    <item name="effort" xsi:type="string">medium</item>
+                                </item>
+                            </item>
+                            <item name="high" xsi:type="array">
+                                <item name="reasoning" xsi:type="array">
+                                    <item name="effort" xsi:type="string">high</item>
+                                </item>
+                            </item>
+                        </item>
                     </item>
                 </item>
                 <item name="anthropic_messages" xsi:type="array">
@@ -218,6 +309,70 @@
                     <item name="defaults" xsi:type="array">
                         <item name="max_tokens" xsi:type="number">4096</item>
                     </item>
+                    <!-- Anthropic has no "required": "any" is its own name for "call some tool".
+                         reasoning_effort spreads across two fields: `thinking.type` switches
+                         extended thinking on or off, and `output_config.effort` only means anything
+                         once it is on, so "none" leaves it out entirely.
+
+                         Two of these are model-dependent (see docs/PROVIDERS.md, "Model-dependent
+                         values"): models whose thinking is always on reject "disabled", and some
+                         recent models reject a forced tool choice ("any" or "tool"). -->
+                    <item name="values" xsi:type="array">
+                        <item name="tool_choice" xsi:type="array">
+                            <item name="auto" xsi:type="array">
+                                <item name="tool_choice" xsi:type="array">
+                                    <item name="type" xsi:type="string">auto</item>
+                                </item>
+                            </item>
+                            <item name="none" xsi:type="array">
+                                <item name="tool_choice" xsi:type="array">
+                                    <item name="type" xsi:type="string">none</item>
+                                </item>
+                            </item>
+                            <item name="required" xsi:type="array">
+                                <item name="tool_choice" xsi:type="array">
+                                    <item name="type" xsi:type="string">any</item>
+                                </item>
+                            </item>
+                            <item name="tool" xsi:type="array">
+                                <item name="tool_choice" xsi:type="array">
+                                    <item name="type" xsi:type="string">tool</item>
+                                    <item name="name" xsi:type="string">{{name}}</item>
+                                </item>
+                            </item>
+                        </item>
+                        <item name="reasoning_effort" xsi:type="array">
+                            <item name="none" xsi:type="array">
+                                <item name="thinking" xsi:type="array">
+                                    <item name="type" xsi:type="string">disabled</item>
+                                </item>
+                            </item>
+                            <item name="low" xsi:type="array">
+                                <item name="thinking" xsi:type="array">
+                                    <item name="type" xsi:type="string">adaptive</item>
+                                </item>
+                                <item name="output_config" xsi:type="array">
+                                    <item name="effort" xsi:type="string">low</item>
+                                </item>
+                            </item>
+                            <item name="medium" xsi:type="array">
+                                <item name="thinking" xsi:type="array">
+                                    <item name="type" xsi:type="string">adaptive</item>
+                                </item>
+                                <item name="output_config" xsi:type="array">
+                                    <item name="effort" xsi:type="string">medium</item>
+                                </item>
+                            </item>
+                            <item name="high" xsi:type="array">
+                                <item name="thinking" xsi:type="array">
+                                    <item name="type" xsi:type="string">adaptive</item>
+                                </item>
+                                <item name="output_config" xsi:type="array">
+                                    <item name="effort" xsi:type="string">high</item>
+                                </item>
+                            </item>
+                        </item>
+                    </item>
                 </item>
                 <!-- Gemini nests these under generationConfig and spells them in camelCase. -->
                 <item name="gemini" xsi:type="array">
@@ -230,9 +385,77 @@
                     <item name="lists" xsi:type="array">
                         <item name="stop" xsi:type="string">stop</item>
                     </item>
+                    <!-- Gemini's tool choice is `toolConfig.functionCallingConfig.mode`, with
+                         `allowedFunctionNames` narrowing which tool "ANY" is allowed to be. Its
+                         thinking control has no effort levels of its own, only a token budget
+                         (`thinkingConfig.thinkingBudget`); the tiers below are this module's own
+                         choice, not a value Google's API defines. The budget is per model: 2.5
+                         Flash accepts 0 to switch thinking off, 2.5 Pro enforces a minimum and
+                         rejects it, and newer models take a named thinking level rather than a
+                         budget (see docs/PROVIDERS.md, "Model-dependent values"). -->
+                    <item name="values" xsi:type="array">
+                        <item name="tool_choice" xsi:type="array">
+                            <item name="auto" xsi:type="array">
+                                <item name="toolConfig" xsi:type="array">
+                                    <item name="functionCallingConfig" xsi:type="array">
+                                        <item name="mode" xsi:type="string">AUTO</item>
+                                    </item>
+                                </item>
+                            </item>
+                            <item name="none" xsi:type="array">
+                                <item name="toolConfig" xsi:type="array">
+                                    <item name="functionCallingConfig" xsi:type="array">
+                                        <item name="mode" xsi:type="string">NONE</item>
+                                    </item>
+                                </item>
+                            </item>
+                            <item name="required" xsi:type="array">
+                                <item name="toolConfig" xsi:type="array">
+                                    <item name="functionCallingConfig" xsi:type="array">
+                                        <item name="mode" xsi:type="string">ANY</item>
+                                    </item>
+                                </item>
+                            </item>
+                            <item name="tool" xsi:type="array">
+                                <item name="toolConfig" xsi:type="array">
+                                    <item name="functionCallingConfig" xsi:type="array">
+                                        <item name="mode" xsi:type="string">ANY</item>
+                                        <item name="allowedFunctionNames" xsi:type="array">
+                                            <item name="0" xsi:type="string">{{name}}</item>
+                                        </item>
+                                    </item>
+                                </item>
+                            </item>
+                        </item>
+                        <item name="reasoning_effort" xsi:type="array">
+                            <item name="none" xsi:type="array">
+                                <item name="thinkingConfig" xsi:type="array">
+                                    <item name="thinkingBudget" xsi:type="number">0</item>
+                                </item>
+                            </item>
+                            <item name="low" xsi:type="array">
+                                <item name="thinkingConfig" xsi:type="array">
+                                    <item name="thinkingBudget" xsi:type="number">1024</item>
+                                </item>
+                            </item>
+                            <item name="medium" xsi:type="array">
+                                <item name="thinkingConfig" xsi:type="array">
+                                    <item name="thinkingBudget" xsi:type="number">8192</item>
+                                </item>
+                            </item>
+                            <item name="high" xsi:type="array">
+                                <item name="thinkingConfig" xsi:type="array">
+                                    <item name="thinkingBudget" xsi:type="number">24576</item>
+                                </item>
+                            </item>
+                        </item>
+                    </item>
                 </item>
                 <!-- Ollama's bridge moves everything it does not recognise as a top-level key into
-                     the nested `options` object for us, so only the name has to change. -->
+                     the nested `options` object for us, so only the name has to change. It has no
+                     tool-choice concept at all, so that canonical option is left out of `values`
+                     entirely: "auto" stays a no-op, anything else is refused. Its reasoning control
+                     is the `think` field: a plain `false` for "none", the level name otherwise. -->
                 <item name="ollama" xsi:type="array">
                     <item name="map" xsi:type="array">
                         <item name="max_tokens" xsi:type="string">num_predict</item>
@@ -242,6 +465,22 @@
                     </item>
                     <item name="lists" xsi:type="array">
                         <item name="stop" xsi:type="string">stop</item>
+                    </item>
+                    <item name="values" xsi:type="array">
+                        <item name="reasoning_effort" xsi:type="array">
+                            <item name="none" xsi:type="array">
+                                <item name="think" xsi:type="boolean">false</item>
+                            </item>
+                            <item name="low" xsi:type="array">
+                                <item name="think" xsi:type="string">low</item>
+                            </item>
+                            <item name="medium" xsi:type="array">
+                                <item name="think" xsi:type="string">medium</item>
+                            </item>
+                            <item name="high" xsi:type="array">
+                                <item name="think" xsi:type="string">high</item>
+                            </item>
+                        </item>
                     </item>
                 </item>
             </argument>

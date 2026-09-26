@@ -59,7 +59,13 @@ class ChatRequest implements ChatRequestInterface
     public function withAssistantTurn(ChatResponseInterface $response): ChatRequestInterface
     {
         return $this->withMessage(
-            new ChatMessage(MessageRole::Assistant, $response->getText(), $response->getToolCalls())
+            new ChatMessage(
+                MessageRole::Assistant,
+                $response->getText(),
+                $response->getToolCalls(),
+                null,
+                $response->getReasoning(),
+            )
         );
     }
 

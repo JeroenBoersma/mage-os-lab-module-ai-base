@@ -94,7 +94,7 @@ per-call option was ever set.
 
 ## Options
 
-Four options are provider-neutral and get translated to whatever the configured backend calls
+Six options are provider-neutral and get translated to whatever the configured backend calls
 them, so the same code works whichever one an administrator picked:
 
 | Option | Notes |
@@ -103,6 +103,16 @@ them, so the same code works whichever one an administrator picked:
 | `temperature` | Same name everywhere. |
 | `top_p` | `topP` on Google. |
 | `stop` | `stop_sequences` on Anthropic, `stopSequences` on Google; a single string is wrapped into a list where the provider wants one. **Not supported on OpenAI and Azure**, whose Responses API has no such parameter — passing it there throws rather than being dropped. |
+| `tool_choice` | `auto`, `none`, `required`, or `['tool' => '<name>']` to force one specific tool. Each value is translated too, not only renamed: Anthropic's "required" is `any`. **Not supported on Ollama** — `auto` is a no-op there since it is every provider's own default, anything else throws. |
+| `reasoning_effort` | `none`, `low`, `medium` or `high`. Spreads across more than one request field on some providers (Anthropic sets both `thinking` and `output_config`). |
+
+For `tool_choice` and `reasoning_effort`, only the values listed above are translated. Any other
+value is taken to be the provider's own and sent as written, so code already forcing a tool in
+Anthropic's shape (`['type' => 'tool', 'name' => 'get_orders']`) or asking OpenAI for `minimal`
+effort keeps working. Some of the translated values are only accepted by some models of a
+provider, not all of them; see
+[PROVIDERS.md](PROVIDERS.md#model-dependent-values) before relying on `reasoning_effort: none` or a
+forced tool on Anthropic or Gemini.
 
 Anything else is passed through to the provider untouched, so provider-specific features stay
 reachable (Anthropic's `thinking`, Ollama's `keep_alive`, ...). That is the escape hatch for code
@@ -199,9 +209,18 @@ for ($i = 0; $i < $maxIterations; $i++) {
 
 `ChatRequestInterface` is immutable, so each iteration gets a fresh request and nothing leaks
 into one a caller still holds. Two methods carry the two halves of a turn that are easy to get
-wrong: `withAssistantTurn()` puts the model's own message back with its tool calls attached
-(append the text and forget the calls, and the provider rejects results answering calls it
-cannot see), and `withToolResult()` binds each result to the call that produced it.
+wrong: `withAssistantTurn()` puts the model's own message back with its tool calls and any
+reasoning blocks attached (append the text and forget the calls, and the provider rejects results
+answering calls it cannot see; drop a required reasoning block and a provider that demands it back
+rejects the whole turn instead), and `withToolResult()` binds each result to the call that
+produced it.
+
+Reasoning belongs to the service that produced it. Its signature is only meaningful to that
+provider, and the Anthropic and Gemini bridges pass a foreign one on as if it were their own,
+which the provider is likely to reject. If you store a transcript and replay it later, drop the
+reasoning from stored assistant turns whenever the service has changed since, for instance
+because an administrator picked a different one in between. Replaying to the same service is
+what it is for.
 
 ### Streaming
 
@@ -347,7 +366,7 @@ everything without any change:
 | A call rejected before it ever reached the provider: an unsupported option, an invalid model override, a tool result message missing its call id | `chat()` / `complete()` / `streamChat()` | `AiRequestNotSentException` |
 | The provider rejected the configured credentials | `chat()` / `complete()` / `streamChat()` | `AiAuthenticationException` |
 | The provider throttled the call | `chat()` / `complete()` / `streamChat()` | `AiRateLimitedException` (`getRetryAfter(): ?int`) |
-| A server error, an overloaded model, or a stream that ended before reporting completion | `chat()` / `complete()` / `streamChat()` | `AiTransientException` |
+| A server error, an overloaded model, a network failure (connection refused, DNS failure, connection reset, timeout), or a stream that ended before reporting completion | `chat()` / `complete()` / `streamChat()` | `AiTransientException` |
 | A bad request, a prompt over the context window, or an unknown model | `chat()` / `complete()` / `streamChat()` | `AiInvalidRequestException` |
 | The provider's safety filter refused to answer | `chat()` / `complete()` / `streamChat()` | `AiContentFilteredException` (extends `AiInvalidRequestException`) |
 | The model's tool call arguments could not be parsed as JSON | `chat()` / `complete()` / `streamChat()` | `AiToolCallException` |

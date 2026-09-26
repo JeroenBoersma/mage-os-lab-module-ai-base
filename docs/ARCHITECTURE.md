@@ -100,7 +100,9 @@ Console/Command/
 2. POST hits `EncryptedServices` (the `backend_model` in `system.xml`):
    - `restoreRow()` — any submitted `******` placeholder is replaced by the previously
      stored (still encrypted) value for that row/service/field, so saving without retyping
-     keeps credentials. Row identity relies on the form reusing stored row IDs.
+     keeps credentials. Row identity relies on the form reusing stored row IDs. Restore is
+     refused (`isRedirected()`) if `base_url`/`endpoint` changed in the same save, so a
+     redirected endpoint can never read back a credential it was never issued.
    - `encryptRow()` — descriptor-flagged fields are encrypted with Magento's
      `EncryptorInterface`. Encryption is idempotent: values already carrying the encryptor
      envelope (`N:N:...`) are left alone.
@@ -143,7 +145,11 @@ and OpenAI-compatible endpoints reject unknown body fields with a 400, so the sa
 `num_predict` on Ollama, and Anthropic rejects a request that omits it entirely. Which shape a
 provider speaks is the `dialect` on its `BridgeRegistry` entry; the dialects themselves are
 di.xml data, so a third party registering a provider declares one alongside its bridge. Only the
-universal four are touched — everything else reaches the provider verbatim.
+universal options are touched — everything else reaches the provider verbatim. `tool_choice` and
+`reasoning_effort` need their *values* translated too, not only their key (Anthropic's `required`
+is `any`), and one value can expand into several target fields (Anthropic's `reasoning_effort`
+sets both `thinking` and `output_config`), which is what the dialect's `values` table is for; see
+[PROVIDERS.md](PROVIDERS.md#4-wire-a-client-bridge-optional-but-recommended).
 
 Token usage is normalized the same way, once, per bridge: `SymfonyAiClient` hands every raw
 `TokenUsage` object it reads off a result (or a stream delta) to `Model\Client\UsageNormalizer`
@@ -280,6 +286,9 @@ saves so credential restore can match rows.
   applies only to rows whose provider class is no longer registered (defense in depth for
   removed third-party modules).
 - **No plaintext in the admin**: masked on load, restored on save (see flows above).
+  Restore also refuses to carry a masked credential across an edited `base_url`/
+  `endpoint` in the same save, since that would let a redirected endpoint read back a
+  credential it was never issued.
 - **Legacy tolerance**: values without the encryptor envelope are treated as plaintext and
   pass through reads unchanged; they get encrypted on the next admin save.
 - **CSP**: all form JavaScript is emitted through `SecureHtmlRenderer` (hash/nonce), safe
@@ -299,7 +308,7 @@ saves so credential restore can match rows.
 
 The client layer adapts [symfony/ai-platform](https://github.com/symfony/ai) rather than
 hand-rolling per-provider HTTP clients. The **OpenAI and Anthropic bridges are hard
-requirements** (pinned `^0.13`); every other bridge stays under `suggest`.
+requirements** (pinned `^0.14`); every other bridge stays under `suggest`.
 
 Originally every symfony/ai package was a soft dependency, for three reasons: installability
 (symfony/ai-platform needs Symfony 7.3+ components, which older Magento releases cannot
@@ -318,9 +327,9 @@ Its README says so outright: *"This Component is experimental. Experimental feat
 covered by Symfony's Backward Compatibility Promise."* That is not hypothetical on the surface
 a tool loop touches most: its changelog reworked `Message::ofAssistant()` in 0.9 and
 `Message::ofToolCall()` in 0.11, 0.12 moved every bridge into its own package, and 0.13
-added `ListenerInterface::onError()`. The adapter (`SymfonyAiClient` + `ClientFactory`)
-quarantines that churn to two classes; signatures are verified against **v0.13.0** and must be
-re-verified on upgrade — which is why the require is pinned to `^0.13` rather than left open.
+added `ListenerInterface::onError()`, and 0.14 added `TokenUsageInterface::getModel()`. The
+adapter (`SymfonyAiClient` + `ClientFactory`) quarantines that churn to two classes; signatures are verified against **v0.14.0** and must be
+re-verified on upgrade — which is why the require is pinned to `^0.14` rather than left open.
 
 Consequences: consumers depend on `AiClientInterface` only; bridges are still FQCN strings
 resolved lazily with guards, because the seven non-required providers remain optional and a

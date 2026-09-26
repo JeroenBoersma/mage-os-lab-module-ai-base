@@ -157,6 +157,7 @@ $response->getText();
 $response->getToolCalls();
 $response->getUsage();
 $response->getFinishReason();     // normalized across providers; Length means truncated
+$response->getReasoning();        // opaque; withAssistantTurn() carries it into the next turn
 
 $stream = $client->streamChat($request);
 foreach ($stream as $chunk) {
@@ -171,10 +172,10 @@ back with `withAssistantTurn()`. Streamed tool calls arrive complete, with argum
 decoded, so there is no SSE parsing to do. Full example with the tool loop:
 [docs/CONSUMING.md](docs/CONSUMING.md).
 
-The four options every provider has (`max_tokens`, `temperature`, `top_p`, `stop`) are
-translated to whatever the configured backend calls them, so moving a workload between
-providers does not silently change the cap it runs under. Anything else passes through
-untouched.
+The options every provider has (`max_tokens`, `temperature`, `top_p`, `stop`, `tool_choice`,
+`reasoning_effort`) are translated to whatever the configured backend calls them, so moving a
+workload between providers does not silently change the cap it runs under, or force a tool call
+one backend cannot express. Anything else passes through untouched.
 
 Provider bridges are registered per service code in `etc/di.xml` (`bridges` argument of
 `Model\Client\BridgeRegistry`); third-party modules can register additional providers there,
@@ -226,7 +227,9 @@ re-encrypted the next time the configuration is saved in the admin.
 
 In the admin form, stored credentials are displayed as an obscured `******` placeholder
 instead of the real value. Saving the form without retyping a credential keeps the
-previously stored value; entering a new value replaces it.
+previously stored value; entering a new value replaces it. If `base_url`/`endpoint` is
+edited in the same save, the previously stored credential is not carried over — this
+stops a redirected endpoint from reading back a credential it was never issued.
 
 ### Testing a connection
 
