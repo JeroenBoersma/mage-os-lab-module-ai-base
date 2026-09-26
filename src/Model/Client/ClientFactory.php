@@ -507,6 +507,6 @@ class ClientFactory implements AiClientFactoryInterface
     {
         $baseUrl = rtrim(trim($this->stringValue($config, 'base_url')), '/');
 
-        return preg_replace('#/v1$#', '', $baseUrl);
+        return preg_replace('#/v1$#', '', $baseUrl) ?? $baseUrl;
     }
 }

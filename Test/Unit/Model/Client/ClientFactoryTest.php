@@ -546,6 +546,7 @@ final class ClientFactoryTest extends TestCase
             new AiService('row_compat', 'openai_compatible', [
                 'base_url' => $storedBaseUrl,
                 'api_key'  => 'sk-local',
+                'model'    => 'local-model',
             ]),
         ]);
         $this->clientFactory->method('create')->willReturn($this->createMock(SymfonyAiClient::class));
